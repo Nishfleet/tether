@@ -104,12 +104,17 @@ Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed
 (the tag must equal `v` plus the `package.json` version). It runs the typecheck
 and tests on Node 22.23.3, builds `dist/`, adds a production-only
 `node_modules`, and publishes `tether-<tag>.tar.gz` and
-`tether-<tag>.tar.gz.sha256` to the GitHub release. The tarball is
-reproducible: the same tag builds the same bytes.
+`tether-<tag>.tar.gz.sha256` to the GitHub release. The asset name keeps the
+`v` (`tether-v0.1.0.tar.gz`). Both jobs run on the pinned `ubuntu-24.04` image
+and the tarball is packed deterministically, so its bytes are stable for that
+image; the sha256 pinned in fleet-ops is what is actually enforced. A release
+is never overwritten: if one exists for the tag, the workflow fails.
 
 The fleet-ops host config downloads a pinned version, checks its sha256 before
-unpacking, and unpacks it to `/opt/tether/<version>`. There is no manual
-install.
+unpacking, and unpacks it to `/opt/tether/<version>`. `<version>` has no `v`
+(for example `/opt/tether/0.1.0`). There is no manual install.
+
+`node dist/index.js --version` prints the version and exits.
 
 ## Run from source
 

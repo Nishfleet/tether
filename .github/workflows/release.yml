@@ -7,9 +7,17 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       TAG: ${{ github.ref_name }}
@@ -36,13 +44,23 @@ jobs:
         run: |
           mkdir stage
           cp -r dist package.json package-lock.json stage/
-          npm ci --omit=dev --prefix stage
+          npm ci --omit=dev --ignore-scripts --prefix stage
       - name: Pack deterministic tarball
         run: |
           tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-            --mode=go-w -cf - -C stage . | gzip -n > "tether-$TAG.tar.gz"
+            --mode='u+rwX,go+rX,go-w' -cf - -C stage . | gzip -n > "tether-$TAG.tar.gz"
           sha256sum "tether-$TAG.tar.gz" > "tether-$TAG.tar.gz.sha256"
           cat "tether-$TAG.tar.gz.sha256"
+      - name: Smoke-test the tarball
+        run: |
+          smoke="$(mktemp -d)"
+          tar -xzf "tether-$TAG.tar.gz" -C "$smoke"
+          cd "$smoke"
+          for f in dist/*.js; do
+            node --check "$f"
+            [ "$f" = dist/index.js ] || node --input-type=module -e 'await import(process.argv[1])' "$PWD/$f"
+          done
+          test "$(node dist/index.js --version)" = "${TAG#v}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release
@@ -53,7 +71,7 @@ jobs:
 
   publish:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: write
@@ -69,6 +87,12 @@ jobs:
         run: sha256sum --check "tether-$TAG.tar.gz.sha256"
       - name: Create release
         run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "release exists, delete it to rebuild" >&2
+            exit 1
+          fi
+          flags=()
+          case "$TAG" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$TAG" "tether-$TAG.tar.gz" "tether-$TAG.tar.gz.sha256" \
-            --verify-tag --title "$TAG" \
+            "${flags[@]}" --verify-tag --title "$TAG" \
             --notes "Built by the release workflow from tag $TAG. Verify with sha256sum --check tether-$TAG.tar.gz.sha256."
