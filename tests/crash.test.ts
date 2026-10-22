@@ -1,0 +1,119 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, it } from "node:test";
+import { STOPPED_TEXT } from "../src/app.ts";
+import { FakeModel, call, flatten, hold, inbound, say } from "./helpers.ts";
+import { Tether } from "./process.ts";
+
+const opts = { timeout: 60000 };
+
+describe("tether process, killed with SIGKILL and restarted", () => {
+  let dir: string;
+  let model: FakeModel;
+  const running: Tether[] = [];
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), "tether-crash-"));
+    model = new FakeModel();
+    await model.start();
+  });
+
+  afterEach(async () => {
+    for (const tether of running.splice(0)) await tether.terminate();
+    await model.stop();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function start(hangSend = false): Promise<Tether> {
+    const tether = new Tether({ stateDir: dir, baseUrl: model.url, hangSend });
+    running.push(tether);
+    await tether.started();
+    return tether;
+  }
+
+  it("finishes a reply that was cut off mid-model-call", opts, async () => {
+    model.enqueue(hold());
+    const first = await start();
+    first.push(inbound("m1", "tell me a story"));
+    await model.requestCount(1);
+    await first.kill9();
+    assert.deepEqual(first.sent, []);
+
+    model.enqueue(say("Once upon a time."));
+    const second = await start();
+    await second.until(() => second.sent.length >= 1);
+    assert.deepEqual(second.sent, ["Once upon a time."]);
+    assert.match(flatten(model.requests[1] as never), /tell me a story/);
+    assert.equal(await second.terminate(), 0);
+    assert.deepEqual(second.sent, ["Once upon a time."], "delivered exactly once");
+  });
+
+  it("finishes a reply that was cut off mid-send", opts, async () => {
+    model.enqueue(say("Your answer."));
+    const first = await start(true);
+    first.push(inbound("m1", "question"));
+    await first.until(() => first.sending.length >= 1);
+    assert.deepEqual(first.sending, ["Your answer."]);
+    await first.kill9();
+
+    const second = await start();
+    await second.until(() => second.sent.length >= 1);
+    assert.deepEqual(second.sent, ["Your answer."]);
+    assert.equal(model.requests.length, 1, "the model was not asked again");
+  });
+
+  it("keeps the thread and memory notes across kills", opts, async () => {
+    model.enqueue(call("memory_save", { note: "daughter is called Mia" }), say("Noted."));
+    const first = await start();
+    first.push(inbound("m1", "remember my daughter is called Mia"));
+    await first.logged("reply_sent");
+    await first.kill9();
+
+    model.enqueue(say("Her name is Mia."));
+    const second = await start();
+    second.push(inbound("m2", "what is her name?"));
+    await second.logged("reply_sent");
+    const request = model.requests.at(-1);
+    assert.match(flatten(request as never), /daughter is called Mia/);
+    assert.match(JSON.stringify(request?.messages), /remember my daughter is called Mia/);
+    assert.match(JSON.stringify(request?.messages), /Noted\./);
+    await second.kill9();
+    assert.deepEqual(second.sent, ["Her name is Mia."]);
+
+    model.enqueue(say("Still Mia."));
+    const third = await start();
+    third.push(inbound("m3", "and again?"));
+    await third.until(() => third.sent.length >= 1);
+    assert.match(JSON.stringify(model.requests.at(-1)?.messages), /what is her name\?/);
+    assert.match(flatten(model.requests.at(-1) as never), /daughter is called Mia/);
+  });
+
+  it("stays stopped after a kill until RESUME", opts, async () => {
+    const first = await start();
+    first.push(inbound("m1", "STOP"));
+    await first.logged("reply_sent");
+    assert.equal(first.sent[0], STOPPED_TEXT);
+    await first.kill9();
+
+    const second = await start();
+    second.push(inbound("m2", "hello?"));
+    second.push(inbound("m3", "RESUME"));
+    await second.until(() => second.sent.length >= 1);
+    assert.equal(second.sent[0], "Resumed.");
+    assert.equal(model.requests.length, 0, "no model call while stopped");
+  });
+
+  it("does not leak message text or handles into its logs", opts, async () => {
+    model.enqueue(say("fine"));
+    const first = await start();
+    first.push(inbound("m1", "my private question"));
+    first.push(inbound("m2", "intruder words", { sender: "stranger@example.test" }));
+    await first.until(() => first.sent.length >= 1);
+    await first.terminate();
+    const logs = first.stderr.join("\n");
+    assert.doesNotMatch(logs, /private question|intruder words|stranger@example|owner@example|router-key/);
+    assert.match(logs, /sender_not_allowed/);
+  });
+});
