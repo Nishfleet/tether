@@ -98,11 +98,24 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 
 State is one SQLite file, `tether.sqlite`, in the state directory.
 
-## Install and run
+## Install
+
+Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed
+(the tag must equal `v` plus the `package.json` version). It runs the typecheck
+and tests on Node 22.23.3, builds `dist/`, adds a production-only
+`node_modules`, and publishes `tether-<tag>.tar.gz` and
+`tether-<tag>.tar.gz.sha256` to the GitHub release. The tarball is
+reproducible: the same tag builds the same bytes.
+
+The fleet-ops host config downloads a pinned version, checks its sha256 before
+unpacking, and unpacks it to `/opt/tether/<version>`. There is no manual
+install.
+
+## Run from source
 
 Needs Node.js 22.19 or newer (`node:sqlite`, and Pi Durable's own `engines`).
 The unit runs `/usr/bin/node --enable-source-maps /opt/tether/dist/index.js`,
-so the release installed at `/opt/tether` (root-owned) must contain `dist/`,
+so the installed release (root-owned) must contain `dist/`,
 `package.json` and a production `node_modules` (`npm ci --omit=dev`).
 
 ```sh
