@@ -1,8 +1,8 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeSync } from "node:fs";
 
 if (process.argv.includes("--version")) {
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
-  console.log(manifest.version);
+  writeSync(1, `${manifest.version}\n`);
   process.exit(0);
 }
 
