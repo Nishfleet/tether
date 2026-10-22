@@ -9,18 +9,21 @@ export const SPACE = "space-1";
 export type ChatRequest = {
   model: string;
   stream?: boolean;
+  max_tokens?: number;
   messages: { role: string; content?: unknown; tool_calls?: unknown; tool_call_id?: string }[];
   tools?: { function: { name: string } }[];
 };
 
 export type Reply =
   | { kind: "text"; text: string }
+  | { kind: "cut"; text: string }
   | { kind: "tool"; name: string; args: Record<string, unknown> }
   | { kind: "toolText"; text: string; name: string; args: Record<string, unknown> }
   | { kind: "hold" }
   | { kind: "fail" };
 
 export const say = (text: string): Reply => ({ kind: "text", text });
+export const cut = (text: string): Reply => ({ kind: "cut", text });
 export const call = (name: string, args: Record<string, unknown>): Reply => ({ kind: "tool", name, args });
 export const fail = (): Reply => ({ kind: "fail" });
 export const hold = (): Reply => ({ kind: "hold" });
@@ -106,9 +109,9 @@ export class FakeModel {
       };
       res.write(`data: ${JSON.stringify(chunk(delta, null))}\n\n`);
       res.write(`data: ${JSON.stringify(chunk({}, "tool_calls"))}\n\n`);
-    } else if (reply.kind === "text") {
+    } else if (reply.kind === "text" || reply.kind === "cut") {
       res.write(`data: ${JSON.stringify(chunk({ role: "assistant", content: reply.text }, null))}\n\n`);
-      res.write(`data: ${JSON.stringify(chunk({}, "stop"))}\n\n`);
+      res.write(`data: ${JSON.stringify(chunk({}, reply.kind === "cut" ? "length" : "stop"))}\n\n`);
     } else {
       const delta = {
         role: "assistant",

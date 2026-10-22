@@ -67,6 +67,17 @@ without the model. Text `RESUME` to continue.
   128000 is a conservative value, not a measured one. If the group is smaller,
   lower `contextWindow` in `src/model.ts`.
 
+## Long replies
+
+The model may write up to 16384 output tokens per answer (`MAX_OUTPUT_TOKENS` in
+`src/model.ts`; the `assistant` group sets no cap of its own). An answer longer
+than 3500 characters is split at paragraph, line, sentence or word boundaries
+(or cut hard where a stretch has none) and sent as several texts in order. Delivery is at least once per part. Each part is its own durable checkpoint of
+the `tether.reply` task, so a retry or a restart continues with the next part.
+If the model still stops at its length limit, the last text ends with
+`(truncated: this reply hit my length limit)`. The system prompt tells the model
+that it sends one reply per message and must not promise parts or follow-ups.
+
 ## Crash-proofing
 
 The runtime is Pi Durable (`@earendil-works/pi-durable`) on SQLite. Each text

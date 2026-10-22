@@ -6,11 +6,11 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { HarnessSettings } from "@earendil-works/pi-durable";
-import { startTether, type Tether, STOPPED_TEXT, RESUMED_TEXT } from "../src/app.ts";
+import { startTether, type Tether, INSTRUCTIONS, STOPPED_TEXT, RESUMED_TEXT } from "../src/app.ts";
 import { seedNote } from "./offline.ts";
-import { createModelAccess } from "../src/model.ts";
-import { FAILURE_TEXT } from "../src/reply.ts";
-import { ALLOWED, FakeChannel, FakeModel, KEY, SPACE, call, fail, flatten, hold, inbound, say } from "./helpers.ts";
+import { createModelAccess, MAX_OUTPUT_TOKENS } from "../src/model.ts";
+import { FAILURE_TEXT, MAX_PART_CHARS, TRUNCATED_MARKER } from "../src/reply.ts";
+import { ALLOWED, FakeChannel, FakeModel, KEY, SPACE, call, cut, fail, flatten, hold, inbound, say } from "./helpers.ts";
 
 const opts = { timeout: 30000 };
 
@@ -74,6 +74,54 @@ describe("tether app, in process", () => {
     assert.equal(model.requests[0]?.model, "assistant");
     assert.deepEqual(model.badAuth, []);
     assert.match(flatten(model.requests[0] as never), /hi tether/);
+  });
+
+  it("asks the router for a long output budget", opts, async () => {
+    model.enqueue(say("ok"));
+    await boot();
+    channel.push(inbound("m1", "hi"));
+    await channel.sentCount(1);
+    assert.equal(model.requests[0]?.max_tokens, MAX_OUTPUT_TOKENS);
+  });
+
+  it("delivers an over-long answer in full, in order, as several sends", opts, async () => {
+    const poem = Array.from({ length: 300 }, (_, i) => `Line ${i + 1}: the quiet river keeps on running past the old stone mill`).join("\n");
+    assert.ok(poem.length > MAX_PART_CHARS * 3);
+    model.enqueue(say(poem));
+    await boot();
+    channel.push(inbound("m1", "write a 300 line poem"));
+    await channel.sentCount(Math.ceil(poem.length / MAX_PART_CHARS));
+    await logged("reply_sent");
+    assert.ok(channel.sent.length >= 4);
+    for (const sent of channel.sent) {
+      assert.equal(sent.space, SPACE);
+      assert.ok(sent.text.length <= MAX_PART_CHARS);
+    }
+    assert.equal(channel.sent.map((sent) => sent.text).join("\n"), poem);
+  });
+
+  it("keeps the remaining parts when a send fails mid-way", opts, async () => {
+    const text = Array.from({ length: 200 }, (_, i) => `Row ${i + 1} of the long answer goes here`).join("\n");
+    model.enqueue(say(text));
+    await boot();
+    channel.failures = 2;
+    channel.push(inbound("m1", "long please"));
+    await logged("reply_sent");
+    assert.equal(logs.filter((line) => line.includes('"send_failed"')).length, 2);
+    assert.equal(channel.sent.map((sent) => sent.text).join("\n"), text);
+  });
+
+  it("marks an answer that the model cut at its length limit", opts, async () => {
+    model.enqueue(cut("Roses are red, and"));
+    await boot();
+    channel.push(inbound("m1", "poem"));
+    await channel.sentCount(1);
+    assert.equal(channel.sent[0]?.text, `Roses are red, and\n\n${TRUNCATED_MARKER}`);
+  });
+
+  it("tells the model that it cannot send a multi-part reply", () => {
+    assert.match(INSTRUCTIONS, /one reply/);
+    assert.match(INSTRUCTIONS, /never promise parts/);
   });
 
   it("ignores other senders and group chats without calling the model or replying", opts, async () => {

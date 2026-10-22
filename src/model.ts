@@ -12,6 +12,7 @@ export function routerBaseUrl(base: string): string {
 }
 
 export const DEFAULT_CONTEXT_WINDOW = 128000;
+export const MAX_OUTPUT_TOKENS = 16384;
 
 export function createModelAccess(options: { baseUrl: string; apiKey: string; contextWindow?: number }): { models: Models; ref: ModelRef } {
   const baseUrl = routerBaseUrl(options.baseUrl);
@@ -25,7 +26,7 @@ export function createModelAccess(options: { baseUrl: string; apiKey: string; co
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: options.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-    maxTokens: 2048,
+    maxTokens: MAX_OUTPUT_TOKENS,
     compat: {
       supportsStore: false,
       supportsDeveloperRole: false,
