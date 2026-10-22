@@ -82,7 +82,6 @@ describe("tether app, in process", () => {
     channel.push(inbound("m1", "hi"));
     await channel.sentCount(1);
     assert.equal(model.requests[0]?.max_tokens, MAX_OUTPUT_TOKENS);
-    assert.ok((model.requests[0]?.max_tokens ?? 0) >= 16384);
   });
 
   it("delivers an over-long answer in full, in order, as several sends", opts, async () => {

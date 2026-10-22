@@ -24,7 +24,7 @@ export type Reply =
 
 export const say = (text: string): Reply => ({ kind: "text", text });
 export const cut = (text: string): Reply => ({ kind: "cut", text });
-export const call =(name: string, args: Record<string, unknown>): Reply => ({ kind: "tool", name, args });
+export const call = (name: string, args: Record<string, unknown>): Reply => ({ kind: "tool", name, args });
 export const fail = (): Reply => ({ kind: "fail" });
 export const hold = (): Reply => ({ kind: "hold" });
 

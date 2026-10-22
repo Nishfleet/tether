@@ -101,7 +101,7 @@ export function createReplyTask(options: { channel: Channel; log: Log; retryBase
         if (await haltedByStop(task.input, runtime, context)) return;
         const aborting = withAbortSignal(runtime.signal, context);
         try {
-          await channel.send(task.input.space, parts[index] ?? "");
+          await channel.send(task.input.space, parts[index] ?? text);
         } catch (error) {
           log("send_failed", { attempt, error: error instanceof Error ? error.name : "unknown" });
           if (attempt + 1 >= SEND_ATTEMPTS) {
