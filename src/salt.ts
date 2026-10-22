@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
@@ -11,5 +11,6 @@ export function loadSalt(stateDir: string): string {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
+  chmodSync(path, 0o600);
   return readFileSync(path, "utf8");
 }

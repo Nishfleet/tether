@@ -3,7 +3,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { MemoryDoc, NOTE_CHARS, NOTE_LIMIT } from "./docs.ts";
 
-const noteId = (note: string) => `n${createHash("sha256").update(note).digest("hex").slice(0, 8)}`;
+const digest = (note: string) => createHash("sha256").update(note).digest("hex");
 
 const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
 
@@ -13,15 +13,19 @@ const save = defineTool({
   parameters: Type.Object({ note: Type.String({ minLength: 1, maxLength: NOTE_CHARS }) }),
   replay: "safe",
   execute: async (args, api, context) => {
-    const id = noteId(args.note);
+    const full = digest(args.note);
     const outcome = await api.commit(async (tx) => {
       const memory = await tx.doc(MemoryDoc);
-      if (memory.notes.some((note) => note.id === id)) return "saved";
-      if (memory.notes.length >= NOTE_LIMIT) return "full";
+      const short = `n${full.slice(0, 8)}`;
+      const clash = memory.notes.find((note) => note.id === short);
+      if (clash?.text === args.note) return short;
+      const id = clash ? `n${full}` : short;
+      if (memory.notes.some((note) => note.id === id)) return id;
+      if (memory.notes.length >= NOTE_LIMIT) return undefined;
       memory.notes.push({ id, text: args.note, at: api.now() });
-      return "saved";
+      return id;
     }, context);
-    return outcome === "saved" ? text(`Saved as ${id}.`) : { ...text(`Memory is full (${NOTE_LIMIT} notes). Forget one first.`), isError: true };
+    return outcome !== undefined ? text(`Saved as ${outcome}.`) : { ...text(`Memory is full (${NOTE_LIMIT} notes). Forget one first.`), isError: true };
   },
 });
 

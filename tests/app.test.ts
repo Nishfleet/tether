@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import type { HarnessSettings } from "@earendil-works/pi-durable";
 import { startTether, type Tether, STOPPED_TEXT, RESUMED_TEXT } from "../src/app.ts";
+import { seedNote } from "./offline.ts";
 import { createModelAccess } from "../src/model.ts";
 import { FAILURE_TEXT } from "../src/reply.ts";
 import { ALLOWED, FakeChannel, FakeModel, KEY, SPACE, call, fail, flatten, hold, inbound, say } from "./helpers.ts";
@@ -41,8 +43,8 @@ describe("tether app, in process", () => {
     return new Promise((resolve) => logWaiters.push({ event, resolve }));
   }
 
-  async function boot(retryBaseMs = 5): Promise<Tether> {
-    const { models, ref } = createModelAccess({ baseUrl: model.url, apiKey: KEY });
+  async function boot(retryBaseMs = 5, extra: { contextWindow?: number; compaction?: HarnessSettings["compaction"] } = {}): Promise<Tether> {
+    const { models, ref } = createModelAccess({ baseUrl: model.url, apiKey: KEY, ...(extra.contextWindow ? { contextWindow: extra.contextWindow } : {}) });
     tether = await startTether({
       channel,
       models,
@@ -58,7 +60,7 @@ describe("tether app, in process", () => {
         }
       },
       retryBaseMs,
-      settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 }, stream: { maxRetries: 0 } },
+      settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 }, stream: { maxRetries: 0 }, ...(extra.compaction ? { compaction: extra.compaction } : {}) },
     });
     return tether;
   }
@@ -156,6 +158,17 @@ describe("tether app, in process", () => {
     assert.equal(logs.filter((line) => line.includes("send_failed")).length, 2);
   });
 
+  it("sends only the last assistant message's text when the model wrote prose beside a tool call", opts, async () => {
+    model.enqueue(
+      { kind: "toolText", text: "Let me note that.", name: "memory_save", args: { note: "likes tea" } },
+      say("Both noted."),
+    );
+    await boot();
+    channel.push(inbound("m1", "remember I like tea"));
+    await channel.sentCount(1);
+    assert.deepEqual(channel.sent.map((entry) => entry.text), ["Both noted."]);
+  });
+
   it("keeps both notes when one message asks for two saves", opts, async () => {
     model.enqueue(call("memory_save", { note: "likes tea" }), call("memory_save", { note: "allergic to nuts" }), say("Both noted."));
     await boot();
@@ -169,6 +182,21 @@ describe("tether app, in process", () => {
     assert.match(prompt, /allergic to nuts/);
     const results = JSON.stringify(model.requests[2]?.messages);
     assert.equal((results.match(/Saved as n[0-9a-f]{8}/g) ?? []).length, 2);
+  });
+
+  it("stores a different note under the full digest when the short id is taken", opts, async () => {
+    const note = "note B";
+    const full = createHash("sha256").update(note).digest("hex");
+    await seedNote(join(dir, "t.sqlite"), { id: `n${full.slice(0, 8)}`, text: "an unrelated note", at: 1 });
+    model.enqueue(call("memory_save", { note }), call("memory_save", { note }), say("done"));
+    await boot();
+    channel.push(inbound("m1", "save it"));
+    await channel.sentCount(1);
+    model.enqueue(say("ok"));
+    channel.push(inbound("m2", "recall"));
+    await channel.sentCount(2);
+    const memory = String(model.requests.at(-1)?.messages[0]?.content).split("\n").filter((line) => /^n[0-9a-f]+: /.test(line));
+    assert.deepEqual(memory.sort(), [`n${full.slice(0, 8)}: an unrelated note`, `n${full}: ${note}`].sort());
   });
 
   it("drops an exhausted send from the in-flight list so RESUME does not re-ask it", opts, async () => {
@@ -195,6 +223,23 @@ describe("tether app, in process", () => {
     const from = /"from":"([0-9a-f]+)"/.exec(line)?.[1];
     assert.ok(from);
     assert.notEqual(from, createHash("sha256").update("stranger@example.test").digest("hex").slice(0, 8));
+  });
+
+  it("compacts the thread when it crosses a small context window and keeps replying", opts, async () => {
+    model.fallback = (request) => (JSON.stringify(request.messages).toLowerCase().includes("summar") && !request.tools ? say("SUMMARY of the thread so far.") : say("ok"));
+    await boot(5, { contextWindow: 2000, compaction: { enabled: true, reserveTokens: 500, keepRecentTokens: 300, backgroundTokens: 0 } });
+    const filler = "lorem ipsum dolor sit amet ".repeat(40);
+    for (let turn = 1; turn <= 6; turn++) {
+      channel.push(inbound(`m${turn}`, `${filler} turn ${turn}`));
+      await channel.sentCount(turn);
+    }
+    const summaries = model.requests.filter((request) => JSON.stringify(request.messages).includes("context summarization assistant"));
+    assert.ok(summaries.length >= 1, "a summarize request was made");
+    assert.deepEqual(channel.sent.map((entry) => entry.text), Array(6).fill("ok"));
+    const last = JSON.stringify(model.requests.at(-1)?.messages);
+    assert.match(last, /SUMMARY of the thread so far\./);
+    assert.doesNotMatch(last, /turn 1\b/);
+    assert.match(last, /turn 6\b/);
   });
 
   it("sends a fixed apology when the model keeps failing", opts, async () => {

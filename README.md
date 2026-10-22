@@ -45,9 +45,11 @@ without the model. Text `RESUME` to continue.
   before anything runs. A send that was already handed to the channel when
   `STOP` arrived can still complete, so the owner may see an answer twice
   around a `STOP` (once sent, once re-asked after `RESUME`).
+  The `Stopped.` confirmation is best-effort across a crash: a kill before it
+  is sent can lose it (the stopped state itself is kept).
 - **Models.** Only the LiteLLM router (OpenAI-compatible), model group
-  `assistant`, at `TETHER_LLM_BASE_URL` (default `http://127.0.0.1:4000`, the
-  client appends `/v1`), with its own virtual key in `TETHER_LLM_API_KEY`.
+  `assistant`, at `TETHER_LLM_BASE_URL` (default `http://127.0.0.1:4000`; the
+  client appends `/v1` unless the path already ends in it), with its own virtual key in `TETHER_LLM_API_KEY`.
 - **Memory.** The model has two tools, `memory_save` and `memory_forget`. Notes
   (up to 100, 500 characters each) live in a durable document in the same SQLite
   file and are listed in the system prompt of every request, so they survive
@@ -58,7 +60,9 @@ without the model. Text `RESUME` to continue.
   `assistant` group once the context passes `contextWindow - 16384` tokens
   (the app declares 128000), starts earlier in the background, and compacts and
   retries once if the router rejects a request as too long. Old entries stay in
-  SQLite. The window size is an assumption about the `assistant` group; if the
+  SQLite. A test runs a thread across a 2000-token window against the fake model
+  and checks that a summarize request happens and replies keep working; the
+  default numbers above come from the library, not from that test. The window size is an assumption about the `assistant` group; if the
   group is smaller, lower `contextWindow` in `src/model.ts`.
 
 ## Crash-proofing
@@ -89,7 +93,7 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 | `TETHER_LLM_API_KEY` | yes | the router virtual key |
 | `PHOTON_PROJECT_ID` | yes | Photon Spectrum project id |
 | `PHOTON_PROJECT_SECRET` | yes | Photon Spectrum project secret |
-| `TETHER_LLM_BASE_URL` | no | router base URL, default `http://127.0.0.1:4000` |
+| `TETHER_LLM_BASE_URL` | no | router base URL, default `http://127.0.0.1:4000`; `/v1` is appended unless the path already ends in it |
 | `TETHER_STATE_DIR` | no | state directory; falls back to `STATE_DIRECTORY`, which systemd sets to `/var/lib/tether` |
 
 State is one SQLite file, `tether.sqlite`, in the state directory.

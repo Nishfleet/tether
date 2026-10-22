@@ -8,10 +8,12 @@ const PROVIDER_ID = "router";
 export function routerBaseUrl(base: string): string {
   const url = new URL(base);
   const path = url.pathname.replace(/\/+$/, "");
-  return `${url.origin}${path === "" ? "/v1" : path}`;
+  return `${url.origin}${path.endsWith("/v1") ? path : `${path}/v1`}`;
 }
 
-export function createModelAccess(options: { baseUrl: string; apiKey: string }): { models: Models; ref: ModelRef } {
+export const DEFAULT_CONTEXT_WINDOW = 128000;
+
+export function createModelAccess(options: { baseUrl: string; apiKey: string; contextWindow?: number }): { models: Models; ref: ModelRef } {
   const baseUrl = routerBaseUrl(options.baseUrl);
   const model: Model<"openai-completions"> = {
     id: MODEL_GROUP,
@@ -22,7 +24,7 @@ export function createModelAccess(options: { baseUrl: string; apiKey: string }):
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
+    contextWindow: options.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: 2048,
     compat: {
       supportsStore: false,

@@ -16,6 +16,7 @@ export type ChatRequest = {
 export type Reply =
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; args: Record<string, unknown> }
+  | { kind: "toolText"; text: string; name: string; args: Record<string, unknown> }
   | { kind: "hold" }
   | { kind: "fail" };
 
@@ -30,6 +31,7 @@ export function flatten(request: ChatRequest): string {
 
 export class FakeModel {
   readonly requests: ChatRequest[] = [];
+  fallback: ((request: ChatRequest) => Reply) | undefined;
   readonly closed: number[] = [];
   readonly badAuth: string[] = [];
   private readonly script: Reply[] = [];
@@ -84,7 +86,8 @@ export class FakeModel {
       if (this.requests.length >= waiter.count) waiter.resolve();
       else this.waiters.push(waiter);
     }
-    const reply = this.script.shift() ?? say("(no scripted reply)");
+    const request = this.requests[index] as ChatRequest;
+    const reply = this.script.shift() ?? this.fallback?.(request) ?? say("(no scripted reply)");
     if (reply.kind === "fail") {
       res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "upstream down" } }));
       return;
@@ -95,7 +98,15 @@ export class FakeModel {
       return;
     }
     res.writeHead(200, { "content-type": "text/event-stream" });
-    if (reply.kind === "text") {
+    if (reply.kind === "toolText") {
+      const delta = {
+        role: "assistant",
+        content: reply.text,
+        tool_calls: [{ index: 0, id: `call_${index}`, type: "function", function: { name: reply.name, arguments: JSON.stringify(reply.args) } }],
+      };
+      res.write(`data: ${JSON.stringify(chunk(delta, null))}\n\n`);
+      res.write(`data: ${JSON.stringify(chunk({}, "tool_calls"))}\n\n`);
+    } else if (reply.kind === "text") {
       res.write(`data: ${JSON.stringify(chunk({ role: "assistant", content: reply.text }, null))}\n\n`);
       res.write(`data: ${JSON.stringify(chunk({}, "stop"))}\n\n`);
     } else {

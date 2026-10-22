@@ -6,7 +6,7 @@ import { normalizeHandle } from "../src/channel.ts";
 import { loadConfig, loadPhotonConfig } from "../src/config.ts";
 import { classify } from "../src/control.ts";
 import { routerBaseUrl } from "../src/model.ts";
-import { mkdtempSync, statSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
 import { loadSalt, SALT_FILE } from "../src/salt.ts";
@@ -65,6 +65,7 @@ describe("config", () => {
     assert.equal(routerBaseUrl("http://127.0.0.1:4000"), "http://127.0.0.1:4000/v1");
     assert.equal(routerBaseUrl("http://127.0.0.1:4000/"), "http://127.0.0.1:4000/v1");
     assert.equal(routerBaseUrl("http://router.example/v1/"), "http://router.example/v1");
+    assert.equal(routerBaseUrl("http://router.example/litellm"), "http://router.example/litellm/v1");
   });
 });
 
@@ -74,6 +75,9 @@ describe("log salt", () => {
     try {
       const first = loadSalt(dir);
       assert.match(first, /^[0-9a-f]{32}$/);
+      assert.equal(loadSalt(dir), first);
+      assert.equal(statSync(join(dir, SALT_FILE)).mode & 0o777, 0o600);
+      chmodSync(join(dir, SALT_FILE), 0o644);
       assert.equal(loadSalt(dir), first);
       assert.equal(statSync(join(dir, SALT_FILE)).mode & 0o777, 0o600);
       const other = mkdtempSync(join(tmpdir(), "tether-salt-"));

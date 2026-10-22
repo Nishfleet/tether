@@ -39,12 +39,9 @@ const release = async (tx: Tx, inbound: string | null) => {
 
 async function answerText(runtime: Runtime, entry: EntryId, context: Context): Promise<string | undefined> {
   const record = await runtime.entry(entry, context);
-  const parts: string[] = [];
-  for (const message of record?.model ?? []) {
-    if (message.role !== "assistant") continue;
-    for (const block of message.content) if (block.type === "text") parts.push(block.text);
-  }
-  const joined = parts.join("").trim();
+  const last = (record?.model ?? []).findLast((message) => message.role === "assistant");
+  if (last?.role !== "assistant") return undefined;
+  const joined = last.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("").trim();
   return joined === "" ? undefined : joined;
 }
 
