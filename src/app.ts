@@ -36,6 +36,7 @@ export type TetherOptions = {
   readonly model: ModelRef;
   readonly storage: Storage;
   readonly allowedSender: string;
+  readonly salt: string;
   readonly log: Log;
   readonly retryBaseMs?: number;
   readonly settings?: HarnessSettings;
@@ -46,7 +47,7 @@ export type Tether = {
   stop(): Promise<void>;
 };
 
-const fingerprint = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 8);
+const fingerprint = (salt: string, value: string) => createHash("sha256").update(`${salt}:${value}`).digest("hex").slice(0, 8);
 
 function reply(item: Pending): ReplyInput {
   return { space: item.space, inbound: item.inbound, prompt: item.prompt, notice: null, run: item.run };
@@ -57,7 +58,7 @@ function notice(space: string, text: string): ReplyInput {
 }
 
 export async function startTether(options: TetherOptions): Promise<Tether> {
-  const { channel, log, allowedSender } = options;
+  const { channel, log, allowedSender, salt } = options;
   const context = BACKGROUND_CONTEXT;
   const task = createReplyTask({ channel, log, retryBaseMs: options.retryBaseMs ?? 5000 });
   const registry = createRegistry();
@@ -139,7 +140,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
   const handle = async (message: Inbound): Promise<void> => {
     const verdict = classify(message, allowedSender);
     if (verdict.kind === "ignore") {
-      log("ignored", { id: message.id, reason: verdict.reason, from: fingerprint(message.sender) });
+      log("ignored", { id: message.id, reason: verdict.reason, from: fingerprint(salt, message.sender) });
       return;
     }
     const outcome =
@@ -147,6 +148,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
     log("handled", { id: message.id, kind: verdict.kind, outcome });
   };
 
+  if ((await harness.snapshot(StateDoc, context))?.stopped) await root.abort(context);
   harness.resume();
   log("started");
 

@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { MemoryDoc, NOTE_CHARS, NOTE_LIMIT } from "./docs.ts";
+
+const noteId = (note: string) => `n${createHash("sha256").update(note).digest("hex").slice(0, 8)}`;
 
 const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
 
@@ -10,7 +13,7 @@ const save = defineTool({
   parameters: Type.Object({ note: Type.String({ minLength: 1, maxLength: NOTE_CHARS }) }),
   replay: "safe",
   execute: async (args, api, context) => {
-    const id = `n${api.taskId}`;
+    const id = noteId(args.note);
     const outcome = await api.commit(async (tx) => {
       const memory = await tx.doc(MemoryDoc);
       if (memory.notes.some((note) => note.id === id)) return "saved";

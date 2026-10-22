@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { startTether, type Tether, STOPPED_TEXT, RESUMED_TEXT } from "../src/app.ts";
@@ -33,6 +34,13 @@ describe("tether app, in process", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  const logWaiters: { event: string; resolve: () => void }[] = [];
+
+  function logged(event: string): Promise<void> {
+    if (logs.some((line) => line.includes(`"event":"${event}"`))) return Promise.resolve();
+    return new Promise((resolve) => logWaiters.push({ event, resolve }));
+  }
+
   async function boot(retryBaseMs = 5): Promise<Tether> {
     const { models, ref } = createModelAccess({ baseUrl: model.url, apiKey: KEY });
     tether = await startTether({
@@ -41,7 +49,14 @@ describe("tether app, in process", () => {
       model: ref,
       storage: await openNodeSqliteStorage(join(dir, "t.sqlite")),
       allowedSender: ALLOWED,
-      log: (event, fields) => logs.push(JSON.stringify({ event, ...fields })),
+      salt: "test-salt",
+      log: (event, fields) => {
+        logs.push(JSON.stringify({ event, ...fields }));
+        for (const waiter of logWaiters.splice(0)) {
+          if (event === waiter.event) waiter.resolve();
+          else logWaiters.push(waiter);
+        }
+      },
       retryBaseMs,
       settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 }, stream: { maxRetries: 0 } },
     });
@@ -139,6 +154,47 @@ describe("tether app, in process", () => {
     await channel.sentCount(1);
     assert.deepEqual(channel.sent, [{ space: SPACE, text: "eventually" }]);
     assert.equal(logs.filter((line) => line.includes("send_failed")).length, 2);
+  });
+
+  it("keeps both notes when one message asks for two saves", opts, async () => {
+    model.enqueue(call("memory_save", { note: "likes tea" }), call("memory_save", { note: "allergic to nuts" }), say("Both noted."));
+    await boot();
+    channel.push(inbound("m1", "remember I like tea and that I am allergic to nuts"));
+    await channel.sentCount(1);
+    model.enqueue(say("ok"));
+    channel.push(inbound("m2", "recall"));
+    await channel.sentCount(2);
+    const prompt = flatten(model.requests.at(-1) as never);
+    assert.match(prompt, /likes tea/);
+    assert.match(prompt, /allergic to nuts/);
+    const results = JSON.stringify(model.requests[2]?.messages);
+    assert.equal((results.match(/Saved as n[0-9a-f]{8}/g) ?? []).length, 2);
+  });
+
+  it("drops an exhausted send from the in-flight list so RESUME does not re-ask it", opts, async () => {
+    model.enqueue(say("never delivered"));
+    channel.failures = 8;
+    await boot(1);
+    channel.push(inbound("m1", "hi"));
+    await logged("send_gave_up");
+    assert.equal(channel.failures, 0);
+    channel.push(inbound("m2", "STOP"));
+    channel.push(inbound("m3", "RESUME"));
+    await channel.sentCount(2);
+    assert.deepEqual(channel.sent.map((entry) => entry.text).sort(), ["Resumed.", STOPPED_TEXT].sort());
+    assert.equal(model.requests.length, 1, "the dead message was not asked again");
+  });
+
+  it("logs a salted hash of an ignored sender", opts, async () => {
+    await boot();
+    channel.push(inbound("x1", "hi", { sender: "stranger@example.test" }));
+    channel.push(inbound("m1", "hello"));
+    model.enqueue(say("ok"));
+    await channel.sentCount(1);
+    const line = logs.find((entry) => entry.includes('"ignored"')) ?? "";
+    const from = /"from":"([0-9a-f]+)"/.exec(line)?.[1];
+    assert.ok(from);
+    assert.notEqual(from, createHash("sha256").update("stranger@example.test").digest("hex").slice(0, 8));
   });
 
   it("sends a fixed apology when the model keeps failing", opts, async () => {

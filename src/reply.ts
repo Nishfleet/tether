@@ -1,5 +1,5 @@
 import { withAbortSignal } from "@earendil-works/chord/context";
-import { defineTask, type EntryId, type Task, type TaskRuntime } from "@earendil-works/pi-durable";
+import { defineTask, type EntryId, type Task, type TaskRuntime, type Tx } from "@earendil-works/pi-durable";
 import type { Context } from "@earendil-works/chord";
 import type { Channel } from "./channel.ts";
 import { StateDoc } from "./docs.ts";
@@ -22,6 +22,21 @@ export const SEND_ATTEMPTS = 8;
 
 type Runtime = TaskRuntime<ReplyInput, ReplyState, null, object>;
 
+async function haltedByStop(input: ReplyInput, runtime: Runtime, context: Context): Promise<boolean> {
+  if (input.inbound === null) return false;
+  const state = await runtime.snapshot(StateDoc, context);
+  if (!state?.stopped) return false;
+  await runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted", reason: "stopped" } }), context);
+  return true;
+}
+
+const release = async (tx: Tx, inbound: string | null) => {
+  if (inbound === null) return;
+  const state = await tx.doc(StateDoc);
+  const index = state.inflight.findIndex((item) => item.inbound === inbound);
+  if (index >= 0) state.inflight.splice(index, 1);
+};
+
 async function answerText(runtime: Runtime, entry: EntryId, context: Context): Promise<string | undefined> {
   const record = await runtime.entry(entry, context);
   const parts: string[] = [];
@@ -41,6 +56,7 @@ export function createReplyTask(options: { channel: Channel; log: Log; retryBase
     initial: (input) => (input.prompt === null ? { phase: "send", text: input.notice ?? "", attempt: 0 } : { phase: "ask" }),
     phases: {
       ask: async (task, runtime, context) => {
+        if (await haltedByStop(task.input, runtime, context)) return;
         const aborting = withAbortSignal(runtime.signal, context);
         const conversation = await runtime.conversation(runtime.conversationId, aborting);
         if (!conversation || task.input.prompt === null) throw new Error("reply task has no conversation or prompt");
@@ -59,16 +75,18 @@ export function createReplyTask(options: { channel: Channel; log: Log; retryBase
       },
       send: async (task, runtime, context) => {
         const { text, attempt } = task.state.checkpoint;
+        if (await haltedByStop(task.input, runtime, context)) return;
         const aborting = withAbortSignal(runtime.signal, context);
         try {
           await channel.send(task.input.space, text);
         } catch (error) {
           log("send_failed", { attempt, error: error instanceof Error ? error.name : "unknown" });
           if (attempt + 1 >= SEND_ATTEMPTS) {
-            await runtime.commit(
-              () => ({ status: "terminal", outcome: { status: "failed", error: { message: "send attempts exhausted" } } }),
-              aborting,
-            );
+            await runtime.commit(async (tx) => {
+              await release(tx, task.input.inbound);
+              return { status: "terminal", outcome: { status: "failed", error: { message: "send attempts exhausted" } } };
+            }, aborting);
+            log("send_gave_up", { inbound: task.input.inbound ?? "notice" });
             return;
           }
           const until = runtime.now() + retryBaseMs * 2 ** attempt;
@@ -76,11 +94,7 @@ export function createReplyTask(options: { channel: Channel; log: Log; retryBase
           return;
         }
         await runtime.commit(async (tx) => {
-          if (task.input.inbound !== null) {
-            const state = await tx.doc(StateDoc);
-            const index = state.inflight.findIndex((item) => item.inbound === task.input.inbound);
-            if (index >= 0) state.inflight.splice(index, 1);
-          }
+          await release(tx, task.input.inbound);
           return { status: "terminal", outcome: { status: "completed", result: null } };
         }, aborting);
         log("reply_sent", { inbound: task.input.inbound ?? "notice", attempt });

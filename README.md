@@ -33,14 +33,18 @@ without the model. Text `RESUME` to continue.
 - **Allowlist.** One handle, `TETHER_ALLOWED_SENDER`, compared after stripping
   spaces and punctuation (case-insensitive for email handles). Every other
   sender, every group chat and every non-text message is ignored and logged
-  with the message id, the reason and a short hash of the sender, never the
-  content or the handle.
+  with the message id, the reason and a short salted hash of the sender (random
+  salt, created once, 0600 in the state directory), never the content or the
+  handle.
 - **STOP and RESUME.** Decided in code before the model is involved, and only
   for the allowed sender. `STOP` records the stopped state durably, aborts the
   running model calls and queued sends, and replies `Stopped`. While stopped,
   texts are ignored and the model is never called. `RESUME` clears the state,
   asks again the replies that `STOP` cut off, and replies `Resumed`. The state
-  survives a restart.
+  survives a restart, and a start while stopped aborts the unfinished work
+  before anything runs. A send that was already handed to the channel when
+  `STOP` arrived can still complete, so the owner may see an answer twice
+  around a `STOP` (once sent, once re-asked after `RESUME`).
 - **Models.** Only the LiteLLM router (OpenAI-compatible), model group
   `assistant`, at `TETHER_LLM_BASE_URL` (default `http://127.0.0.1:4000`, the
   client appends `/v1`), with its own virtual key in `TETHER_LLM_API_KEY`.
@@ -49,6 +53,13 @@ without the model. Text `RESUME` to continue.
   file and are listed in the system prompt of every request, so they survive
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** Those two and nothing else.
+- **Context bound.** The thread is one durable conversation. Pi Durable's
+  automatic compaction (on by default) summarizes older entries with the same
+  `assistant` group once the context passes `contextWindow - 16384` tokens
+  (the app declares 128000), starts earlier in the background, and compacts and
+  retries once if the router rejects a request as too long. Old entries stay in
+  SQLite. The window size is an assumption about the `assistant` group; if the
+  group is smaller, lower `contextWindow` in `src/model.ts`.
 
 ## Crash-proofing
 
@@ -108,6 +119,12 @@ touches Photon or a real model. `tests/crash.test.ts` starts the real app as a
 child process, kills it with SIGKILL mid-model-call and mid-send, restarts it on
 the same state directory and checks that the reply is delivered, that the thread
 and memory notes are still there, and that STOP survives the kill.
+
+## Phase 2 rule
+
+Any future web or HTTP tool must refuse loopback, private, link-local and
+tailnet hosts. The model router's port also serves an unauthenticated
+`/metrics`.
 
 ## Rules for changes
 

@@ -6,12 +6,13 @@ import type { Channel } from "./channel.ts";
 import { type Env, loadConfig } from "./config.ts";
 import type { Log } from "./log.ts";
 import { createModelAccess } from "./model.ts";
+import { loadSalt } from "./salt.ts";
 
 export const DATABASE_FILE = "tether.sqlite";
 
 export async function run(
   env: Env,
-  openChannel: (env: Env) => Promise<Channel>,
+  openChannel: (env: Env, log: Log) => Promise<Channel>,
   log: Log,
   overrides: { retryBaseMs?: number } = {},
 ): Promise<Tether> {
@@ -19,13 +20,14 @@ export async function run(
   mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
   const storage = await openNodeSqliteStorage(join(config.stateDir, DATABASE_FILE));
   const { models, ref } = createModelAccess({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey });
-  const channel = await openChannel(env);
+  const channel = await openChannel(env, log);
   return startTether({
     channel,
     models,
     model: ref,
     storage,
     allowedSender: config.allowedSender,
+    salt: loadSalt(config.stateDir),
     log,
     ...(overrides.retryBaseMs === undefined ? {} : { retryBaseMs: overrides.retryBaseMs }),
   });

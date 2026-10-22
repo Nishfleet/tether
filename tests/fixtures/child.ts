@@ -39,7 +39,7 @@ const channel: Channel = {
 };
 
 const log = (event: string, fields?: Record<string, unknown>) => process.stderr.write(`${JSON.stringify({ event, ...fields })}\n`);
-const tether = await run(process.env, async () => channel, log, { retryBaseMs: 5 });
+const tether = await run(process.env, async (_env, _log) => channel, log, { retryBaseMs: 5 });
 process.once("SIGTERM", () => void tether.stop());
 process.stdout.write(`${JSON.stringify({ ready: true })}\n`);
 await tether.done;

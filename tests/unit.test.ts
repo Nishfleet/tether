@@ -6,6 +6,10 @@ import { normalizeHandle } from "../src/channel.ts";
 import { loadConfig, loadPhotonConfig } from "../src/config.ts";
 import { classify } from "../src/control.ts";
 import { routerBaseUrl } from "../src/model.ts";
+import { mkdtempSync, statSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
+import { loadSalt, SALT_FILE } from "../src/salt.ts";
 import { ALLOWED, inbound } from "./helpers.ts";
 
 describe("classify", () => {
@@ -61,6 +65,29 @@ describe("config", () => {
     assert.equal(routerBaseUrl("http://127.0.0.1:4000"), "http://127.0.0.1:4000/v1");
     assert.equal(routerBaseUrl("http://127.0.0.1:4000/"), "http://127.0.0.1:4000/v1");
     assert.equal(routerBaseUrl("http://router.example/v1/"), "http://router.example/v1");
+  });
+});
+
+describe("log salt", () => {
+  it("is random, created once, kept 0600 and stable across restarts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tether-salt-"));
+    try {
+      const first = loadSalt(dir);
+      assert.match(first, /^[0-9a-f]{32}$/);
+      assert.equal(loadSalt(dir), first);
+      assert.equal(statSync(join(dir, SALT_FILE)).mode & 0o777, 0o600);
+      const other = mkdtempSync(join(tmpdir(), "tether-salt-"));
+      assert.notEqual(loadSalt(other), first);
+      rmSync(other, { recursive: true, force: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("context bound", () => {
+  it("relies on Pi Durable's automatic compaction, which is on by default", () => {
+    assert.equal(DEFAULT_COMPACTION_POLICY.enabled, true);
   });
 });
 

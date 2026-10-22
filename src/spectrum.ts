@@ -2,10 +2,11 @@ import { Spectrum } from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
 import type { Channel, Inbound } from "./channel.ts";
 import type { PhotonConfig } from "./config.ts";
+import type { Log } from "./log.ts";
 
 type SpaceRef = readonly [id: string, phone: string];
 
-export async function spectrumChannel(photon: PhotonConfig): Promise<Channel> {
+export async function spectrumChannel(photon: PhotonConfig, log: Log): Promise<Channel> {
   const app = await Spectrum({
     projectId: photon.projectId,
     projectSecret: photon.projectSecret,
@@ -17,6 +18,10 @@ export async function spectrumChannel(photon: PhotonConfig): Promise<Channel> {
   async function* messages(): AsyncGenerator<Inbound> {
     for await (const [space, message] of app.messages) {
       if (message.direction !== "inbound" || !imessage.is(space)) continue;
+      if (!space.phone) {
+        log("skipped", { id: message.id, reason: "no_phone" });
+        continue;
+      }
       const ref: SpaceRef = [space.id, space.phone];
       yield {
         id: message.id,

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { STOPPED_TEXT } from "../src/app.ts";
 import { FakeModel, call, flatten, hold, inbound, say } from "./helpers.ts";
+import { commitStopWithoutAbort } from "./offline.ts";
 import { Tether } from "./process.ts";
 
 const opts = { timeout: 60000 };
@@ -103,6 +104,48 @@ describe("tether process, killed with SIGKILL and restarted", () => {
     await second.until(() => second.sent.length >= 1);
     assert.equal(second.sent[0], "Resumed.");
     assert.equal(model.requests.length, 0, "no model call while stopped");
+  });
+
+  it("does not run a pending model call after a kill between STOP's commit and its abort", opts, async () => {
+    model.enqueue(hold());
+    const first = await start();
+    first.push(inbound("m1", "slow question"));
+    await model.requestCount(1);
+    await first.kill9();
+    await commitStopWithoutAbort(dir);
+
+    model.enqueue(say("The answer."), say("pong"));
+    const second = await start();
+    second.push(inbound("m1b", "anyone there?"));
+    await second.logged("handled");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.deepEqual(second.sent, []);
+    assert.equal(model.requests.length, 1, "no model call while stopped");
+    second.push(inbound("m2", "RESUME"));
+    second.push(inbound("m3", "ping"));
+    await second.until(() => second.sent.includes("pong"));
+    assert.deepEqual([...second.sent].sort(), ["Resumed.", "The answer.", "pong"]);
+    assert.equal(model.requests.length, 3, "one call before the kill, one re-ask after RESUME, one for the ping, none while stopped");
+  });
+
+  it("does not send a finished reply after a kill between STOP's commit and its abort", opts, async () => {
+    model.enqueue(say("The answer."));
+    const first = await start(true);
+    first.push(inbound("m1", "question"));
+    await first.until(() => first.sending.length >= 1);
+    await first.kill9();
+    await commitStopWithoutAbort(dir);
+
+    model.enqueue(say("The answer, again."));
+    const second = await start();
+    second.push(inbound("m1b", "anyone there?"));
+    await second.logged("handled");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.deepEqual(second.sent, [], "nothing is sent while stopped");
+    second.push(inbound("m2", "RESUME"));
+    await second.until(() => second.sent.length >= 2);
+    assert.deepEqual([...second.sent].sort(), ["Resumed.", "The answer, again."]);
+    assert.equal(second.sent.filter((text) => text === "The answer.").length, 0);
   });
 
   it("does not leak message text or handles into its logs", opts, async () => {
