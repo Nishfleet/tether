@@ -236,7 +236,7 @@ describe("tether app, in process", () => {
     const summaries = model.requests.filter((request) => JSON.stringify(request.messages).includes("context summarization assistant"));
     assert.ok(summaries.length >= 1, "a summarize request was made");
     assert.deepEqual(channel.sent.map((entry) => entry.text), Array(6).fill("ok"));
-    const last = JSON.stringify(model.requests.at(-1)?.messages);
+    const last = JSON.stringify(model.requests.filter((request) => request.tools).at(-1)?.messages);
     assert.match(last, /SUMMARY of the thread so far\./);
     assert.doesNotMatch(last, /turn 1\b/);
     assert.match(last, /turn 6\b/);

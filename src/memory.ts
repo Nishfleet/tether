@@ -46,7 +46,7 @@ const forget = defineTool({
   },
 });
 
-export function createMemoryExtension(tasks: Extension["tasks"]): Extension {
+export function createMemoryExtension(tasks: NonNullable<Extension["tasks"]>): Extension {
   return defineExtension({
     name: "tether",
     tools: [save, forget],
@@ -57,6 +57,6 @@ export function createMemoryExtension(tasks: Extension["tasks"]): Extension {
         return memory.notes.map((note) => `${note.id}: ${note.text}`).join("\n");
       }),
     ],
-    ...(tasks ? { tasks } : {}),
+    tasks,
   });
 }

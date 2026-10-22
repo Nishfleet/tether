@@ -62,8 +62,10 @@ without the model. Text `RESUME` to continue.
   retries once if the router rejects a request as too long. Old entries stay in
   SQLite. A test runs a thread across a 2000-token window against the fake model
   and checks that a summarize request happens and replies keep working; the
-  default numbers above come from the library, not from that test. The window size is an assumption about the `assistant` group; if the
-  group is smaller, lower `contextWindow` in `src/model.ts`.
+  default numbers above come from the library, not from that test. The window size is an assumption about the `assistant` group: the router
+  reports no context size for its deployments (`max_input_tokens` is null), so
+  128000 is a conservative value, not a measured one. If the group is smaller,
+  lower `contextWindow` in `src/model.ts`.
 
 ## Crash-proofing
 
@@ -119,9 +121,12 @@ unpacking, and unpacks it to `/opt/tether/<version>`. `<version>` has no `v`
 ## Run from source
 
 Needs Node.js 22.19 or newer (`node:sqlite`, and Pi Durable's own `engines`).
-The unit runs `/usr/bin/node --enable-source-maps /opt/tether/dist/index.js`,
-so the installed release (root-owned) must contain `dist/`,
-`package.json` and a production `node_modules` (`npm ci --omit=dev`).
+The host unit runs
+`/opt/node-v22.23.3/bin/node --enable-source-maps /opt/tether/current/dist/index.js`.
+The fleet-ops host config links `/opt/tether/current` to `/opt/tether/<version>`
+after verifying the pinned sha256, so the installed release (root-owned) must
+contain `dist/`, `package.json` and a production `node_modules`
+(`npm ci --omit=dev`).
 
 ```sh
 npm ci

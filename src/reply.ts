@@ -41,7 +41,7 @@ async function answerText(runtime: Runtime, entry: EntryId, context: Context): P
   const record = await runtime.entry(entry, context);
   const last = (record?.model ?? []).findLast((message) => message.role === "assistant");
   if (last?.role !== "assistant") return undefined;
-  const joined = last.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("").trim();
+  const joined = last.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n").trim();
   return joined === "" ? undefined : joined;
 }
 
