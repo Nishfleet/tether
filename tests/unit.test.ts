@@ -120,12 +120,26 @@ describe("supply chain", () => {
 });
 
 describe("tier", () => {
-  it("classifies by the response model the router reports, never by anything else", () => {
-    assert.equal(classifyTier("claude-sonnet-5-5"), "primary");
-    assert.equal(classifyTier("anthropic/claude-sonnet-5-5"), "primary");
-    assert.equal(classifyTier("deepseek-v4.1-flash"), "fallback");
-    assert.equal(classifyTier("tether"), "fallback");
-    assert.equal(classifyTier(undefined), "fallback");
+  const served = (model: string | undefined, fallbacks?: string) => ({ model, deployment: undefined, fallbacks });
+
+  it("classifies by the model the router reports: the group alias or a Claude model is primary", () => {
+    assert.equal(classifyTier(served("tether"), "tether"), "primary");
+    assert.equal(classifyTier(served("claude-sonnet-5-5"), "tether"), "primary");
+    assert.equal(classifyTier(served("anthropic/claude-sonnet-5-5"), "tether"), "primary");
+    assert.equal(classifyTier(served("custom-group"), "custom-group"), "primary");
+    assert.equal(classifyTier(served("assistant"), "tether"), "fallback");
+    assert.equal(classifyTier(served("deepseek-v4.1-flash"), "tether"), "fallback");
+    assert.equal(classifyTier(served(undefined), "tether"), "fallback");
+  });
+
+  it("lets x-litellm-attempted-fallbacks decide when it is present", () => {
+    assert.equal(classifyTier(served("tether", "1"), "tether"), "fallback");
+    assert.equal(classifyTier(served("claude-sonnet-5-5", "2"), "tether"), "fallback");
+    assert.equal(classifyTier(served("deepseek-v4.1-flash", "1"), "tether"), "fallback");
+    assert.equal(classifyTier(served("tether", "0"), "tether"), "primary");
+    assert.equal(classifyTier(served("assistant", "0"), "tether"), "primary");
+    assert.equal(classifyTier(served(undefined, "0"), "tether"), "primary");
+    assert.equal(classifyTier(served("assistant", "not-a-number"), "tether"), "fallback");
   });
 
   it("words one notice per switch and none for the baseline or the same tier", () => {

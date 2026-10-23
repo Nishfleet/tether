@@ -349,6 +349,30 @@ describe("tether app, in process", () => {
     assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON)]);
   });
 
+  it("treats the group alias as the primary and the assistant alias as the fallback", opts, async () => {
+    const alias = { model: "tether", headers: { "x-litellm-model-id": "deployment-claude" } };
+    model.enqueue(via(say("one"), alias), via(say("two"), { model: "assistant", headers: { "x-litellm-model-id": "deployment-backup" } }));
+    await boot();
+    channel.push(inbound("m1", "a"));
+    await channel.sentCount(1);
+    channel.push(inbound("m2", "b"));
+    await channel.sentCount(3);
+    await quiet();
+    assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON)]);
+  });
+
+  it("lets the attempted-fallbacks header decide over the model name", opts, async () => {
+    const headers = (count: string) => ({ "x-litellm-model-id": "deployment-x", "x-litellm-attempted-fallbacks": count });
+    model.enqueue(via(say("one"), { model: "tether", headers: headers("0") }), via(say("two"), { model: "tether", headers: headers("1") }));
+    await boot();
+    channel.push(inbound("m1", "a"));
+    await channel.sentCount(1);
+    channel.push(inbound("m2", "b"));
+    await channel.sentCount(3);
+    await quiet();
+    assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON)]);
+  });
+
   it("sends exactly one Back on Claude. when the primary answers again", opts, async () => {
     model.enqueue(via(say("one"), BACKUP_VIA), say("two"), say("three"));
     await boot();

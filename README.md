@@ -85,11 +85,14 @@ without the model. Text `RESUME` to continue.
   `x-litellm-attempted-fallbacks`. The headers are read with the Pi AI
   `onResponse` hook, in a thin wrapper around the OpenAI-compatible stream in
   `src/model.ts`, and saved as an `AssistantMessage` diagnostic of type
-  `router_response`. The reply is `primary` when the response `model` contains
-  `claude` or `anthropic` (case-insensitive), and `fallback` for anything else,
-  including a missing `model`. Nothing is guessed from timing or errors. The
-  deployment id and fallback count are logged (`model_served`) but do not
-  decide the tier: the id is an opaque hash.
+  `router_response`. The router often reports the group alias as the response
+  `model`, so the decision is: when `x-litellm-attempted-fallbacks` is present
+  it decides (0 is `primary`, above 0 is `fallback`); otherwise the reply is
+  `primary` when the response `model` equals `TETHER_MODEL_GROUP` or contains
+  `claude` or `anthropic` (case-insensitive), and `fallback` for anything else
+  (including `assistant` and a missing `model`). Nothing is guessed from
+  timing or errors. The deployment id is logged (`model_served`) but does not
+  decide the tier: it is an opaque hash.
 - **Switch texts.** The last tier used is a durable document in the SQLite
   file. When a reply's tier differs from it, one text goes to the owner
   through the same durable send path as `Stopped.` and `Resumed.`, and the

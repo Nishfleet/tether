@@ -70,18 +70,18 @@ function servedBy(last: AssistantMessage): Served {
   return { model: last.responseModel, deployment: header(DEPLOYMENT_HEADER), fallbacks: header(FALLBACKS_HEADER) };
 }
 
-async function readAnswer(runtime: Runtime, entry: EntryId, context: Context): Promise<Answer | undefined> {
+async function readAnswer(group: string, runtime: Runtime, entry: EntryId, context: Context): Promise<Answer | undefined> {
   const record = await runtime.entry(entry, context);
   const last = (record?.model ?? []).findLast((message) => message.role === "assistant");
   if (last?.role !== "assistant") return undefined;
   const joined = last.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n").trim();
   if (joined === "") return undefined;
   const served = servedBy(last);
-  return { text: last.stopReason === "length" ? `${joined}\n\n${TRUNCATED_MARKER}` : joined, tier: classifyTier(served.model), served };
+  return { text: last.stopReason === "length" ? `${joined}\n\n${TRUNCATED_MARKER}` : joined, tier: classifyTier(served, group), served };
 }
 
-export function createReplyTask(options: { channel: Channel; log: Log; retryBaseMs: number }): Task<ReplyInput, ReplyState, null, object> {
-  const { channel, log, retryBaseMs } = options;
+export function createReplyTask(options: { channel: Channel; log: Log; retryBaseMs: number; group: string }): Task<ReplyInput, ReplyState, null, object> {
+  const { channel, log, retryBaseMs, group } = options;
   const self: Task<ReplyInput, ReplyState, null, object> = defineTask<ReplyInput, ReplyState, null>({
     name: "tether.reply",
     version: 1,
@@ -98,7 +98,7 @@ export function createReplyTask(options: { channel: Channel; log: Log; retryBase
         );
         const settled = await submission.wait(aborting);
         const answer = settled.status === "done" ? settled.answer : undefined;
-        const read = answer === undefined ? undefined : await readAnswer(runtime, answer, aborting);
+        const read = answer === undefined ? undefined : await readAnswer(group, runtime, answer, aborting);
         if (settled.status !== "done") log("model_unanswered", { reason: settled.reason });
         if (read) log("model_served", { tier: read.tier, model: read.served.model ?? "", deployment: read.served.deployment ?? "", fallbacks: read.served.fallbacks ?? "" });
         const { space } = task.input;

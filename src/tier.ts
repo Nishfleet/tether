@@ -15,7 +15,12 @@ export type Served = {
   readonly fallbacks: string | undefined;
 };
 
-export const classifyTier = (model: string | undefined): Tier => (model !== undefined && PRIMARY_MODEL.test(model) ? "primary" : "fallback");
+export function classifyTier(served: Served, group: string): Tier {
+  const attempted = served.fallbacks === undefined || served.fallbacks.trim() === "" ? Number.NaN : Number(served.fallbacks);
+  if (Number.isFinite(attempted)) return attempted > 0 ? "fallback" : "primary";
+  const model = served.model;
+  return model !== undefined && (model === group || PRIMARY_MODEL.test(model)) ? "primary" : "fallback";
+}
 
 export const fallbackText = (reason: string): string => `Switched to the backup model: ${reason}.`;
 

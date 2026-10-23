@@ -61,7 +61,7 @@ function notice(space: string, text: string): ReplyInput {
 export async function startTether(options: TetherOptions): Promise<Tether> {
   const { channel, log, allowedSender, salt } = options;
   const context = BACKGROUND_CONTEXT;
-  const task = createReplyTask({ channel, log, retryBaseMs: options.retryBaseMs ?? 5000 });
+  const task = createReplyTask({ channel, log, retryBaseMs: options.retryBaseMs ?? 5000, group: options.model.modelId });
   const registry = createRegistry();
   registry.install(createMemoryExtension([task]));
   const harness = await Harness.open(
