@@ -11,6 +11,7 @@ import {
   type ToolRegistration,
   type Tx,
 } from "@earendil-works/pi-durable";
+import { StateDoc } from "./docs.ts";
 import type { Log } from "./log.ts";
 import { OwnerDoc } from "./owner.ts";
 
@@ -196,6 +197,7 @@ export function createApprovalExtension(options: ApprovalOptions): Extension {
             const doc = await tx.doc(ApprovalDoc);
             const found = doc.items.find((item) => item.key === key);
             if (found) return found.status;
+            if ((await tx.doc(StateDoc)).stopped) return "stopped";
             const { space } = await tx.doc(OwnerDoc);
             if (space === null) return "no_chat";
             doc.items.push({ key, summary: oneLine(summary), space, expiresAt, asked: false, status: "pending" });
@@ -203,6 +205,7 @@ export function createApprovalExtension(options: ApprovalOptions): Extension {
             return "pending";
           }, base);
           if (filed === "no_chat") return { block: NO_CHAT_BLOCK };
+          if (filed === "stopped") return { block: BLOCKS.cancelled };
           log("approval_filed", { tool: call.name, status: filed });
           for (;;) {
             const seen = wakeups.current();
