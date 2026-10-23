@@ -60,7 +60,8 @@ without the model. Text `RESUME` to continue.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
   `reminder_list`, `reminder_cancel`, `location_request`, `location_last` and
   `places_nearby`, plus the calendar and contacts tools when an account is connected (see
-  Calendar and contacts). Nothing else. Any tool that can act for Nish carries
+  Calendar and contacts) and its own computer when configured (see Its own
+  computer). Nothing else. Any tool that can act for Nish carries
   `askFirst`; see Safety rules.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
@@ -238,6 +239,13 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 | `TETHER_TIMEZONE` | no | IANA zone for reminder times, default `Asia/Kolkata` |
 | `TETHER_LLM_BASE_URL` | no | router base URL, default `http://127.0.0.1:4000`; `/v1` is appended unless the path already ends in it |
 | `TETHER_STATE_DIR` | no | state directory; falls back to `STATE_DIRECTORY`, which systemd sets to `/var/lib/tether` |
+| `TETHER_CUA_URL` | no | loopback URL of the server's Cua daemon, `http(s)://127.0.0.1:<port>`; any other host is refused. Needs `TETHER_CUA_TOKEN` too; with neither set, no computer tool exists |
+| `TETHER_CUA_TOKEN` | no | the daemon's token. Never logged |
+| `TETHER_CUA_HOST` | no | Cua host provider for new Spaces, for example `host:netcup`; empty uses the daemon's default location |
+| `TETHER_CUA_MAC` | no | Cua relay ref of Nish's Mac, `relay:<machine-id>`; empty turns the Mac tools off |
+| `TETHER_CUA_SPACE` | no | name of its own Space, default `tether`; must not start with `tether-job-` |
+| `TETHER_CUA_JOB_SLOTS` | no | most throwaway job Spaces at once, 0 to 4, default 2 |
+| `TETHER_CUA_HOST_SLOTS` | no | the server's Space limit that every new Space counts against, default 4 |
 
 State is one SQLite file, `tether.sqlite`, in the state directory.
 
@@ -353,6 +361,47 @@ child process, kills it with SIGKILL mid-model-call and mid-send, restarts it on
 the same state directory and checks that the reply is delivered, that the thread
 and memory notes are still there, and that STOP survives the kill.
 
+## Its own computer
+
+Tether has its own Cua Linux Space, throwaway job Spaces, and tools for Nish's
+Mac (`Nishfleet/tether#7`). All of it is Pi Durable tools in `src/computer.ts`
+calling the `@trycua/cua` SDK in this process through `connect(url, token)`: the
+server's Cua daemon, reached on loopback with a fixed token, the same agent login
+every agent on the server uses. No MCP bridge, no `cua` CLI, no agent harness.
+Every agent gets its own Space, so the logs show who did what: Tether's is
+`tether` and its jobs are `tether-job-<id>`.
+
+- `computer_run`, `computer_write`, `computer_read`: the persistent Linux Space
+  named `TETHER_CUA_SPACE`, created on `TETHER_CUA_HOST` if missing and started
+  if stopped, before every call.
+- `job_run`: one command in a fresh `tether-job-<id>` Space, deleted when the
+  command ends, even when it fails. Two limits, both checked before creating:
+  `TETHER_CUA_JOB_SLOTS` job Spaces of Tether's own, and the server's
+  `TETHER_CUA_HOST_SLOTS` Spaces in total, counting every Space on the host
+  whoever owns it (`the server's 4 Spaces are all in use`).
+- `mac_status`, `mac_read_messages` (one fixed read-only query on
+  `chat.db`, 1 to 50 rows), `mac_screenshot`: reads, no approval.
+- `mac_send_message` and `mac_act` carry `askFirst`: Nish must answer YES.
+- An asleep or not-sharing Mac gives the result `Nish's Mac is asleep or not
+  sharing`, never a crash.
+- On start Tether deletes leftover Spaces named `tether-job-*` (only those,
+  never `desk` or another agent's Space) and ensures its own Space. If the
+  server has no free slot for it, that is logged as `computer_startup_failed`,
+  Tether takes nobody else's Space, and chat keeps working; the next computer
+  call tries again. Pi Durable 1.4.0 has no extension start hook, so `run` in
+  `src/main.ts` calls it.
+
+Setup: `fleet-ops` gives the daemon a fixed loopback port and token and puts
+`TETHER_CUA_URL` and `TETHER_CUA_TOKEN` in `/etc/tether/tether.env`. Tether needs
+no Cua login or device of its own. The Mac is reached as a relay computer
+(`TETHER_CUA_MAC`); that access is gated by the Mac's sharing switch and the
+server's device enrollment, not a per-agent Touch ID grant, and the Mac's audit
+log shows Tether's actions under Nish's account name.
+
+Switch it off: unset `TETHER_CUA_URL` and `TETHER_CUA_TOKEN`, or remove the
+`createComputer` lines from `src/main.ts`. Delete it: remove `src/computer*`,
+its tests, the `@trycua/cua` dependency, and run `cua spaces delete tether`.
+
 ## Safety rules
 
 Every rule below is enforced by code or by the host, never by a line in the
@@ -367,6 +416,14 @@ model's prompt. A rule that only the host can enforce says so.
 | NO, silence for 24 hours, and STOP cancel a pending approval | Yes | `answer`, `expire` and `cancelAll` in `src/approval.ts` | `tests/approval.test.ts` "cancels on NO: the tool never runs and the model is told", "cancels after silence and tells the model" and "cancels the pending approval on STOP, and a later YES runs nothing" |
 | A pending approval survives a restart and is never asked twice | Yes | the approval document, `api.memo` and one durable key per call | `tests/crash.test.ts` "keeps a pending approval across a kill, asks once, and runs the tool only on YES" and "keeps a pending approval across a clean restart too" |
 | Money is a hard no | Yes, for a tool that declares `money: true`: the hook blocks it with no question. No payment tool exists | `beforeTool` hook in `src/approval.ts` | `tests/approval.test.ts` "blocks a money tool outright, with no question to Nish". A tool that moves money without declaring it is stopped only by review. |
+| Mac messages are sent and Mac actions run only after YES | Yes | `mac_send_message` and `mac_act` declare `askFirst: true` in `src/computer.ts`; the hook in `src/approval.ts` does the rest | `tests/computer.test.ts` "asks first for exactly mac_send_message and mac_act" (fails if a tool is added without a decision) and "does not send an iMessage until Nish says YES, but runs a plain computer call at once" |
+| The Mac can only read one fixed chat.db query | Yes | `messagesQuery` takes only a clamped number | `tests/computer.test.ts` "is one fixed read-only statement against chat.db", "clamps the limit to 1-50 with a default of 10, whatever the caller sends" and "has no way to carry caller text into the command" |
+| Message text cannot break out of the osascript template | Yes | `appleScriptString` and `shellQuote` in `src/computer.ts` | `tests/computer.test.ts` "osascript escaping" (backslash, quote, newline, a hostile string, and a real `sh` round trip). The AppleScript itself is not run in CI. |
+| Job Spaces are capped, always deleted, and never take the server's last slots; leftovers are swept at start | Yes | `job_run` and `startup` in `src/computer.ts` | `tests/computer.test.ts` "refuses at the slot cap without creating anything", "refuses when the server's Spaces are all in use, whoever owns them, without creating anything", "deletes the Space even when the command throws", "never exceeds the cap when jobs start together" and "never exceeds the host limit when its own Space and a job are created together" |
+| The start sweep and its own Space never touch another agent's Space | Yes | `startup` and `ensureSpace` in `src/computer.ts` | `tests/computer.test.ts` "only ever deletes tether-job-* Spaces, never desk, another agent's Space or a near miss" and "refuses to create its own Space when every host slot is taken, and touches nobody else's" |
+| The daemon token goes only to a loopback URL and into no log | Yes | `loadComputerConfig` in `src/config.ts`; `describeError` in `src/computer.ts` | `tests/computer.test.ts` "accepts only a loopback daemon URL, so the token never leaves the host" and "never puts the token in a log line" |
+| An asleep Mac never crashes a tool or hides behind a guess | Yes | `mac` in `src/computer.ts` | `tests/computer.test.ts` "returns the friendly error when the relay says: ..." and "does not hide other errors" |
+| Revoking Mac access | No. `cua devices revoke` and the Mac's sharing switch enforce it | Cua | none in this repo |
 | Scoped keys: each credential is the narrowest the provider offers, in a root-owned env file | No. The provider's key scope and file permissions enforce it. The app reads only named variables and logs no secret | host config in `Nishfleet/fleet-ops` | `tests/unit.test.ts` "names every missing variable and never echoes a value"; `tests/crash.test.ts` "does not leak message text or handles into its logs". The scope itself has no test here. |
 | Firewall: the service account reaches only its allowed hosts | No. The host firewall enforces it | host config in `Nishfleet/fleet-ops`; each new outbound path ships with a real call as proof | none in this repo |
 
