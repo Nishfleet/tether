@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { answer, cancelAll, createApprovalExtension, hasAsked, Wakeups, type AnyGuardedTool } from "./approval.ts";
 import { createAssistExtension } from "./assist.ts";
+import { createCalendarExtension, type CalendarOptions } from "./calendar/tools.ts";
 import type { Channel, Inbound, InboundAttachment } from "./channel.ts";
 import { DEFAULT_TIME_ZONE } from "./clock.ts";
 import { classify } from "./control.ts";
@@ -59,6 +60,7 @@ export type TetherOptions = {
   readonly settings?: HarnessSettings;
   readonly tools?: readonly AnyGuardedTool[];
   readonly approvalTtlMs?: number;
+  readonly calendar?: CalendarOptions;
 };
 
 export type Tether = {
@@ -102,6 +104,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
   const notify = (tx: Tx, space: string, text: string) => queue(tx, notice(space, text));
   const lookup = (name: string) => registry.snapshot().tools().find((entry) => entry.tool.name === name)?.tool as AnyGuardedTool | undefined;
   registry.install(createApprovalExtension({ root: getRoot, context, lookup, notify, wakeups, log, ...(options.approvalTtlMs === undefined ? {} : { ttlMs: options.approvalTtlMs }) }));
+  if (options.calendar) registry.install(createCalendarExtension(options.calendar));
   const harness = await Harness.open(
     options.storage,
     {
