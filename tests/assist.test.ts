@@ -243,6 +243,24 @@ describe("location and nearby places", () => {
     for (const entry of seen) assert.equal(new URL(entry.url).hostname, PLACES_HOST);
   });
 
+  it("says so when a named place is not found", opts, async () => {
+    rig.model.enqueue(call("places_nearby", { query: "cafe", near: "Nowhereville" }), say("No such place."));
+    await rig.boot({ fetch: photon([]) });
+    rig.channel.push(inbound("m1", "cafe near Nowhereville"));
+    await rig.channel.sentCount(1);
+    assert.match(flatten(rig.model.requests[1] as never), /Could not find a place called Nowhereville/);
+  });
+
+  it("survives a malformed vcard from the owner and keeps answering", opts, async () => {
+    rig.model.enqueue(say("still here"));
+    await rig.boot();
+    rig.channel.push(pin("m1", "BEGIN:VCARD\r\nURL:http://maps.apple.com/%\r\nEND:VCARD\r\n"));
+    await rig.logged("attachment_unparsed");
+    rig.channel.push(inbound("m2", "hello"));
+    await rig.channel.sentCount(1);
+    assert.deepEqual(rig.texts(), ["still here"]);
+  });
+
   it("reports a failed lookup to the model without crashing", opts, async () => {
     rig.model.enqueue(say("Saved."), call("places_nearby", { query: "coffee" }), say("Lookup failed, sorry."));
     await rig.boot({

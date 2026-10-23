@@ -61,25 +61,46 @@ function fromUrl(value: string): { latitude: number; longitude: number; name: st
     const found = pair(url.searchParams.get(key) ?? "");
     if (found) return { ...found, name: name !== null && pair(name) === undefined ? name : null };
   }
-  const at = AT_PATH.exec(decodeURIComponent(url.pathname));
+  const at = AT_PATH.exec(safeDecode(url.pathname));
   const found = at ? pair(`${at[1]},${at[2]}`) : undefined;
   return found ? { ...found, name: null } : undefined;
 }
 
 const unescapeValue = (value: string) => value.replace(/\\([,;\\nN])/g, (_all, char: string) => (char === "n" || char === "N" ? " " : char));
 
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+export const LABEL_CHARS = 60;
+
+export function cleanLabel(value: string | null | undefined): string | null {
+  const cleaned = (value ?? "")
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}"]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, LABEL_CHARS)
+    .trim();
+  return cleaned === "" ? null : cleaned;
+}
+
 export function parseLocation(vcard: string): Coordinates | undefined {
   const lines = vcard.replace(/\r?\n[ \t]/g, "").split(/\r?\n/);
-  const label = lines.map((line) => /^FN(?:;[^:]*)?:(.*)$/i.exec(line)?.[1]?.trim()).find((value) => value);
+  const name = lines.map((line) => /^FN(?:;[^:]*)?:(.*)$/i.exec(line)?.[1]?.trim()).find((value) => value);
+  const label = name ? cleanLabel(unescapeValue(name)) : null;
   for (const line of lines) {
     const geo = /^GEO(?:;[^:]*)?:(.*)$/i.exec(line)?.[1];
     const found = geo === undefined ? undefined : pair(unescapeValue(geo));
-    if (found) return { ...found, label: label ? unescapeValue(label) : null };
+    if (found) return { ...found, label };
   }
   for (const line of lines) {
     const value = /^(?:[A-Za-z0-9-]+\.)?URL(?:;[^:]*)?:(\S.*)$/i.exec(line)?.[1];
     const found = value === undefined ? undefined : fromUrl(unescapeValue(value.trim()));
-    if (found) return { latitude: found.latitude, longitude: found.longitude, label: found.name ?? (label ? unescapeValue(label) : null) };
+    if (found) return { latitude: found.latitude, longitude: found.longitude, label: cleanLabel(found.name) ?? label };
   }
   return undefined;
 }
