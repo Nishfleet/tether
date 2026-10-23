@@ -58,8 +58,8 @@ without the model. Text `RESUME` to continue.
   file and are listed in the system prompt of every request, so they survive
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
-  `reminder_list`, `reminder_cancel`, `location_request`, `location_last` and
-  `places_nearby`, plus the calendar and contacts tools when an account is connected (see
+  `reminder_list`, `reminder_cancel`, `location_request`, `location_last`,
+  `places_nearby` and `text_owner`, plus the calendar and contacts tools when an account is connected (see
   Calendar and contacts). Nothing else. Any tool that can act for Nish carries
   `askFirst`; see Safety rules.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
@@ -203,8 +203,17 @@ than 3500 characters is split at paragraph, line, sentence or word boundaries
 (or cut hard where a stretch has none) and sent as several texts in order. Delivery is at least once per part. Each part is its own durable checkpoint of
 the `tether.reply` task, so a retry or a restart continues with the next part.
 If the model still stops at its length limit, the last text ends with
-`(truncated: this reply hit my length limit)`. The system prompt tells the model
-that it sends one reply per message and must not promise parts or follow-ups.
+`(truncated: this reply hit my length limit)`.
+
+**Follow-up parts.** `text_owner` texts the owner one extra message right away
+(up to 3500 characters), so the model can send a long answer in parts: one
+`text_owner` call per part in order, then the last part as its final answer. The
+call waits for the channel to accept the text, so the parts keep their order.
+At most 20 extra texts in 10 minutes (a durable counter, `tether.outbox`), the
+text goes only to the owner's chat, and a failed send is reported to the model
+instead of retried. Unlike a reply, a `text_owner` is not retried after a crash.
+The model cannot text on its own later: the system prompt tells it to promise a
+follow-up only when it sets one with `reminder_set`.
 
 ## Crash-proofing
 

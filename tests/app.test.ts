@@ -120,9 +120,10 @@ describe("tether app, in process", () => {
     assert.equal(channel.sent[0]?.text, `Roses are red, and\n\n${TRUNCATED_MARKER}`);
   });
 
-  it("tells the model that it cannot send a multi-part reply", () => {
+  it("tells the model how to send a reply in parts and that it cannot promise a later follow-up", () => {
     assert.match(INSTRUCTIONS, /one reply/);
-    assert.match(INSTRUCTIONS, /never promise parts/);
+    assert.match(INSTRUCTIONS, /text_owner/);
+    assert.match(INSTRUCTIONS, /never promise a follow-up unless you set one/);
   });
 
   it("ignores other senders and group chats without calling the model or replying", opts, async () => {
@@ -183,6 +184,7 @@ describe("tether app, in process", () => {
       "reminder_cancel",
       "reminder_list",
       "reminder_set",
+      "text_owner",
       "time_now",
     ]);
   });

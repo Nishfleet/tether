@@ -1,12 +1,15 @@
 import { defineExtension, type Extension, type Task } from "@earendil-works/pi-durable";
+import type { Channel } from "./channel.ts";
 import { clockTool } from "./clock.ts";
 import { locationTools } from "./location.ts";
 import type { Log } from "./log.ts";
 import { type Fetch, placesTool } from "./places.ts";
 import { createReminderTask, reminderTools } from "./reminders.ts";
 import type { ReplyInput, ReplyState } from "./reply.ts";
+import { textOwnerTool } from "./texts.ts";
 
 export type AssistOptions = {
+  readonly channel: Channel;
   readonly reply: Task<ReplyInput, ReplyState, null, object>;
   readonly timeZone: string;
   readonly fetch: Fetch;
@@ -23,6 +26,7 @@ export function createAssistExtension(options: AssistOptions): Extension {
       clockTool(options.timeZone),
       ...reminderTools({ task: reminder, timeZone: options.timeZone }),
       ...locationTools({ reply: options.reply }),
+      textOwnerTool({ channel: options.channel, log: options.log }),
       placesTool({ fetch: options.fetch, userAgent: options.userAgent, log: options.log }),
     ],
     tasks: [reminder],
