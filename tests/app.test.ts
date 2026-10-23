@@ -174,7 +174,17 @@ describe("tether app, in process", () => {
     assert.match(flatten(last as never), /prefers oat milk/);
     assert.match(JSON.stringify(last), /remember I prefer oat milk/);
     const names = (last?.tools ?? []).map((tool) => tool.function.name).sort();
-    assert.deepEqual(names, ["memory_forget", "memory_save"]);
+    assert.deepEqual(names, [
+      "location_last",
+      "location_request",
+      "memory_forget",
+      "memory_save",
+      "places_nearby",
+      "reminder_cancel",
+      "reminder_list",
+      "reminder_set",
+      "time_now",
+    ]);
   });
 
   it("STOP aborts the model call and sends nothing for it; RESUME re-asks and replies", opts, async () => {
