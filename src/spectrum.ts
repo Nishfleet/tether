@@ -2,11 +2,14 @@ import { Spectrum } from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
 import type { Channel, Inbound, InboundAttachment } from "./channel.ts";
 import type { PhotonConfig } from "./config.ts";
+import { linkAttachment } from "./location.ts";
 import type { Log } from "./log.ts";
 
 type SpaceRef = readonly [id: string, phone: string];
 
 type AttachmentInfo = { fileName: string; mimeType: string; guid: string; totalBytes: number };
+
+const str = (value: unknown): string | undefined => (typeof value === "string" && value !== "" ? value : undefined);
 
 export async function spectrumChannel(photon: PhotonConfig, log: Log): Promise<Channel> {
   const app = await Spectrum({
@@ -37,7 +40,26 @@ export async function spectrumChannel(photon: PhotonConfig, log: Log): Promise<C
           return found.read();
         },
       }));
-      if (message.content.type !== "text") log("inbound_content", { id: message.id, type: message.content.type, attachments: attachments.length });
+      const fields = message as unknown as Record<string, unknown>;
+      const miniApp = fields.miniApp as { url?: string } | undefined;
+      const sources = [message.content.type === "text" ? message.content.text : undefined, miniApp?.url, str(fields.nativeText), str(fields.subject)];
+      const shared = linkAttachment(...sources);
+      if (shared) attachments.push(shared);
+      if (message.content.type !== "text") {
+        log("inbound_content", {
+          id: message.id,
+          type: message.content.type,
+          attachments: attachments.length,
+          balloon: str(fields.balloonBundleId) ?? "",
+          miniApp: miniApp !== undefined,
+          miniAppUrl: str(miniApp?.url) !== undefined,
+          nativeTextChars: str(fields.nativeText)?.length ?? 0,
+          subjectChars: str(fields.subject)?.length ?? 0,
+          itemType: str(fields.itemType) ?? "",
+          sharedLink: shared !== undefined,
+          keys: Object.keys(fields).sort().join(","),
+        });
+      }
       yield {
         id: message.id,
         sender: message.sender?.id ?? "",

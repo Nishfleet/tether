@@ -105,6 +105,36 @@ export function parseLocation(vcard: string): Coordinates | undefined {
   return undefined;
 }
 
+const MAPS_HOST = /^(?:maps\.apple\.com|maps\.google\.[a-z.]+|maps\.app\.goo\.gl)$/i;
+const GOOGLE_HOST = /^(?:www\.)?google\.[a-z.]+$/i;
+const LINK_IN_TEXT = /https?:\/\/[^\s<>"']+/gi;
+
+function isMapsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return MAPS_HOST.test(url.hostname) || (GOOGLE_HOST.test(url.hostname) && url.pathname.startsWith("/maps"));
+  } catch {
+    return false;
+  }
+}
+
+export function mapsLinks(...sources: readonly (string | undefined)[]): string[] {
+  return sources.flatMap((source) => (source ?? "").match(LINK_IN_TEXT) ?? []).filter(isMapsUrl);
+}
+
+export function isMapsLinkOnly(value: string): boolean {
+  const trimmed = value.trim();
+  return mapsLinks(trimmed).length === 1 && mapsLinks(trimmed)[0] === trimmed;
+}
+
+export function linkAttachment(...sources: readonly (string | undefined)[]): InboundAttachment | undefined {
+  const body = mapsLinks(...sources)
+    .map((link) => `URL:${link}`)
+    .join("\r\n");
+  if (body === "" || parseLocation(body) === undefined) return undefined;
+  return { fileName: "shared-location.loc.vcf", mimeType: "text/x-vlocation", size: body.length, read: async () => Buffer.from(body, "utf8") };
+}
+
 export function describeAge(now: number, at: number): string {
   const minutes = Math.max(0, Math.round((now - at) / 60000));
   if (minutes < 1) return "just now";
