@@ -13,7 +13,6 @@ import {
   type BashResult,
   clampLimit,
   createComputer,
-  JOB_PREFIX,
   MAC_ASLEEP,
   messagesCommand,
   messagesQuery,
@@ -23,17 +22,18 @@ import {
   type SpacePort,
   type SpacesPort,
 } from "../src/computer.ts";
-import { loadConfig, type ComputerConfig } from "../src/config.ts";
+import { type ComputerConfig, JOB_PREFIX, loadConfig } from "../src/config.ts";
 import { createModelAccess } from "../src/model.ts";
 import { ALLOWED, FakeChannel, FakeModel, KEY, SPACE, call, inbound, say } from "./helpers.ts";
 
 const opts = { timeout: 30000 };
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const CONFIG: ComputerConfig = { cuaHome: "/x/cua", spaceName: "tether", hostRef: "host:test", macRef: "relay:mac", jobSlots: 2 };
+const TOKEN = "secret-token-value";
+const CONFIG: ComputerConfig = { url: "http://127.0.0.1:7777", token: TOKEN, spaceName: "tether", hostRef: "host:test", macRef: "relay:mac", jobSlots: 2, hostSlots: 4 };
 const OK: BashResult = { stdout: "hello\n", stderr: "", exitCode: 0, timedOut: false };
 
-const info = (name: string, id: string, powerState = "running"): SpaceInfo => ({ id, name, powerState }) as SpaceInfo;
+const info = (name: string, id: string, powerState = "running", host = "test"): SpaceInfo => ({ id, name, powerState, host, hostName: host }) as SpaceInfo;
 
 class FakeSpace implements SpacePort {
   readonly commands: string[] = [];
@@ -133,37 +133,63 @@ describe("computer extension tools", () => {
     assert.deepEqual(safe.sort(), ["computer_read", "mac_read_messages", "mac_screenshot", "mac_status"]);
   });
 
-  it("offers only the Linux tools without a Mac and only the Mac tools without a host", () => {
+  it("offers only the Linux tools without a Mac and only the Mac tools with one", () => {
     const linux = build(new FakeSpaces(), { ...CONFIG, macRef: "" }).computer.tools.map((tool) => tool.name);
     assert.deepEqual(linux.sort(), ["computer_read", "computer_run", "computer_write", "job_run"]);
-    const mac = build(new FakeSpaces(), { ...CONFIG, hostRef: "" }).computer.tools.map((tool) => tool.name);
-    assert.ok(mac.every((name) => name.startsWith("mac_")));
+    assert.ok(build(new FakeSpaces()).computer.tools.some((tool) => tool.name === "mac_status"));
   });
 });
 
 describe("computer config", () => {
   const base = { TETHER_ALLOWED_SENDER: "a", TETHER_LLM_API_KEY: "k", TETHER_STATE_DIR: "/state" };
+  const cua = { ...base, TETHER_CUA_URL: "http://127.0.0.1:7777", TETHER_CUA_TOKEN: TOKEN };
 
-  it("is off unless a host or a Mac is configured", () => {
+  it("registers nothing unless both the daemon URL and token are set", () => {
     assert.equal(loadConfig(base).computer, undefined);
-    assert.equal(loadConfig({ ...base, TETHER_CUA_HOST: " " }).computer, undefined);
+    assert.equal(loadConfig({ ...base, TETHER_CUA_URL: " ", TETHER_CUA_TOKEN: " " }).computer, undefined);
   });
 
-  it("defaults the home under the state directory, the Space name and two job slots", () => {
-    assert.deepEqual(loadConfig({ ...base, TETHER_CUA_HOST: "host:netcup" }).computer, {
-      cuaHome: "/state/cua",
-      spaceName: "tether",
-      hostRef: "host:netcup",
-      macRef: "",
-      jobSlots: 2,
+  it("names the missing variable of a half-set daemon login and never echoes the token", () => {
+    assert.throws(() => loadConfig({ ...base, TETHER_CUA_URL: "http://127.0.0.1:7777" }), /incomplete environment: TETHER_CUA_TOKEN/);
+    assert.throws(() => loadConfig({ ...base, TETHER_CUA_TOKEN: TOKEN }), (error: Error) => {
+      assert.match(error.message, /TETHER_CUA_URL/);
+      assert.doesNotMatch(error.message, new RegExp(TOKEN));
+      return true;
     });
   });
 
-  it("takes every setting from the environment and rejects a bad slot count", () => {
-    const env = { ...base, TETHER_CUA_HOST: "h", TETHER_CUA_MAC: "relay:m", TETHER_CUA_HOME: "/c", TETHER_CUA_SPACE: "box", TETHER_CUA_JOB_SLOTS: "1" };
-    assert.deepEqual(loadConfig(env).computer, { cuaHome: "/c", spaceName: "box", hostRef: "h", macRef: "relay:m", jobSlots: 1 });
+  it("accepts only a loopback daemon URL, so the token never leaves the host", () => {
+    for (const url of ["http://127.0.0.1:7777", "http://localhost:7777", "http://[::1]:7777"]) {
+      assert.equal(loadConfig({ ...cua, TETHER_CUA_URL: url }).computer?.url, url);
+    }
+    for (const url of ["http://example.com:7777", "http://10.0.0.5:7777", "ftp://127.0.0.1", "not a url", "/run/cua.sock"]) {
+      assert.throws(
+        () => loadConfig({ ...cua, TETHER_CUA_URL: url }),
+        (error: Error) => /TETHER_CUA_URL must be an http\(s\) loopback URL/.test(error.message) && !error.message.includes(TOKEN),
+        url,
+      );
+    }
+  });
+
+  it("defaults the Space name to tether, two job slots and four host slots", () => {
+    assert.deepEqual(loadConfig(cua).computer, {
+      url: "http://127.0.0.1:7777",
+      token: TOKEN,
+      spaceName: "tether",
+      hostRef: "",
+      macRef: "",
+      jobSlots: 2,
+      hostSlots: 4,
+    });
+  });
+
+  it("takes every setting from the environment and rejects bad numbers and a job-like Space name", () => {
+    const env = { ...cua, TETHER_CUA_HOST: "h", TETHER_CUA_MAC: "relay:m", TETHER_CUA_SPACE: "box", TETHER_CUA_JOB_SLOTS: "1", TETHER_CUA_HOST_SLOTS: "6" };
+    assert.deepEqual(loadConfig(env).computer, { url: "http://127.0.0.1:7777", token: TOKEN, spaceName: "box", hostRef: "h", macRef: "relay:m", jobSlots: 1, hostSlots: 6 });
     assert.throws(() => loadConfig({ ...env, TETHER_CUA_JOB_SLOTS: "9" }), /TETHER_CUA_JOB_SLOTS/);
     assert.throws(() => loadConfig({ ...env, TETHER_CUA_JOB_SLOTS: "x" }), /TETHER_CUA_JOB_SLOTS/);
+    assert.throws(() => loadConfig({ ...env, TETHER_CUA_HOST_SLOTS: "-1" }), /TETHER_CUA_HOST_SLOTS/);
+    assert.throws(() => loadConfig({ ...env, TETHER_CUA_SPACE: "tether-job-x" }), /TETHER_CUA_SPACE/);
   });
 });
 
@@ -173,6 +199,30 @@ describe("ensure Space", () => {
     await build(fake).tool("computer_run")({ command: "uname" });
     assert.deepEqual(fake.calls, ["list", "create tether"]);
     assert.equal(fake.created[0]?.on, "host:test");
+  });
+
+  it("leaves the daemon's default location when no host is configured", async () => {
+    const fake = new FakeSpaces();
+    await build(fake, { ...CONFIG, hostRef: "" }).tool("computer_run")({ command: "uname" });
+    assert.equal("on" in (fake.created[0] as object), false);
+  });
+
+  it("refuses to create its own Space when every host slot is taken, and touches nobody else's", async () => {
+    const fake = new FakeSpaces();
+    fake.entries = [info("desk", "d1"), info("agent-a", "a1"), info("agent-b", "b1"), info("agent-c", "c1")];
+    const { computer, logs } = build(fake);
+    await assert.rejects(computer.tools.find((tool) => tool.name === "computer_run")!.execute({ command: "x" } as never, undefined as never, undefined as never), /the server's 4 Spaces are all in use/);
+    await computer.startup();
+    assert.ok(logs.includes("computer_startup_failed"));
+    assert.deepEqual(fake.calls.filter((entry) => entry !== "list"), []);
+    assert.equal(fake.entries.length, 4);
+  });
+
+  it("does not count another host's Spaces against this host's slots", async () => {
+    const fake = new FakeSpaces();
+    fake.entries = [info("a", "1"), info("b", "2"), info("c", "3"), info("d", "4", "running", "elsewhere")];
+    await build(fake).tool("computer_run")({ command: "x" });
+    assert.ok(fake.calls.includes("create tether"));
   });
 
   it("starts a stopped Space", async () => {
@@ -236,6 +286,27 @@ describe("startup", () => {
     assert.deepEqual(logs, ["job_space_swept", "computer_ready"]);
   });
 
+  it("only ever deletes tether-job-* Spaces, never desk, another agent's Space or a near miss", async () => {
+    const fake = new FakeSpaces();
+    const others = ["desk", "tether", "tether-job", "tether-jobs-1", "mytether-job-1", "Tether-Job-1", "agent-a", "agent-a-tether-job-1"];
+    fake.entries = [...others.map((name, index) => info(name, `o${index}`)), info(`${JOB_PREFIX}1`, "j1"), info(`${JOB_PREFIX}2`, "j2")];
+    await build(fake).computer.startup();
+    assert.deepEqual(fake.calls.filter((entry) => entry.startsWith("delete")), ["delete j1", "delete j2"]);
+    assert.deepEqual(fake.entries.map((entry) => entry.name), others);
+  });
+
+  it("never puts the token in a log line", async () => {
+    const fake = new FakeSpaces();
+    fake.list = async () => {
+      throw new Error(`401 for token ${TOKEN}`);
+    };
+    const lines: string[] = [];
+    const computer = createComputer(CONFIG, (event, fields) => void lines.push(JSON.stringify({ event, ...fields })), { spaces: async () => fake });
+    await computer.startup();
+    assert.equal(lines.length, 2);
+    assert.ok(lines.every((line) => !line.includes(TOKEN) && line.includes("[token]")));
+  });
+
   it("logs a loud error and does not throw when it cannot reach Cua", async () => {
     const fake = new FakeSpaces();
     fake.list = async () => {
@@ -244,12 +315,6 @@ describe("startup", () => {
     const { computer, logs } = build(fake);
     await computer.startup();
     assert.deepEqual(logs, ["computer_sweep_failed", "computer_startup_failed"]);
-  });
-
-  it("does nothing without a host", async () => {
-    const fake = new FakeSpaces();
-    await build(fake, { ...CONFIG, hostRef: "" }).computer.startup();
-    assert.deepEqual(fake.calls, []);
   });
 });
 
@@ -290,6 +355,38 @@ describe("job_run", () => {
     assert.equal(result.isError, true);
     assert.match(textOf(result), /Refused: 2 job machines are already running and the limit is 2/);
     assert.deepEqual(fake.calls, ["list"]);
+  });
+
+  it("refuses when the server's Spaces are all in use, whoever owns them, without creating anything", async () => {
+    const fake = new FakeSpaces();
+    fake.entries = [info("desk", "d1"), info("tether", "t1"), info("agent-a", "a1"), info("agent-b", "b1")];
+    const result = await build(fake).tool("job_run")({ command: "x" });
+    assert.equal(result.isError, true);
+    assert.equal(textOf(result), "Refused: the server's 4 Spaces are all in use. Try again later.");
+    assert.deepEqual(fake.calls, ["list"]);
+  });
+
+  it("honours a configured host limit", async () => {
+    const fake = new FakeSpaces();
+    fake.entries = [info("desk", "d1"), info("tether", "t1")];
+    const result = await build(fake, { ...CONFIG, hostSlots: 2 }).tool("job_run")({ command: "x" });
+    assert.equal(textOf(result), "Refused: the server's 2 Spaces are all in use. Try again later.");
+  });
+
+  it("applies the per-Tether job cap as well, before the host limit", async () => {
+    const fake = new FakeSpaces();
+    fake.entries = [info(`${JOB_PREFIX}1`, "j1"), info(`${JOB_PREFIX}2`, "j2")];
+    const result = await build(fake, { ...CONFIG, hostSlots: 2 }).tool("job_run")({ command: "x" });
+    assert.match(textOf(result), /Refused: 2 job machines are already running and the limit is 2/);
+  });
+
+  it("never exceeds the host limit when its own Space and a job are created together", async () => {
+    const fake = new FakeSpaces();
+    fake.entries = [info("desk", "d1"), info("agent-a", "a1")];
+    const { tool } = build(fake, { ...CONFIG, hostSlots: 3 });
+    const results = await Promise.allSettled([tool("computer_run")({ command: "a" }), tool("job_run")({ command: "b" })]);
+    assert.equal(fake.entries.length <= 3, true);
+    assert.equal(results.filter((entry) => entry.status === "rejected" || entry.value.isError === true).length, 1);
   });
 
   it("counts only job Spaces against the cap", async () => {

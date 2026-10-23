@@ -1,14 +1,13 @@
 import { randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { SpaceCreateOptions, SpaceInfo } from "@trycua/cua";
 import { type AnyGuardedTool, defineAskFirstTool } from "./approval.ts";
-import type { ComputerConfig } from "./config.ts";
+import { type ComputerConfig, JOB_PREFIX } from "./config.ts";
 import type { Log } from "./log.ts";
 
-export const JOB_PREFIX = "tether-job-";
 export const MAC_ASLEEP = "Nish's Mac is asleep or not sharing";
 export const DEFAULT_TIMEOUT_SEC = 120;
 export const MAX_TIMEOUT_SEC = 900;
@@ -120,19 +119,31 @@ function serialize() {
   };
 }
 
-const describeError = (error: unknown) => (error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 200) : "unknown");
-
 async function defaultSpaces(config: ComputerConfig): Promise<SpacesPort> {
-  mkdirSync(config.cuaHome, { recursive: true, mode: 0o700 });
-  process.env.CUA_HOME = config.cuaHome;
-  const { embedded } = await import("@trycua/cua");
-  return embedded().spaces();
+  const { connect } = await import("@trycua/cua");
+  return connect(config.url, config.token).spaces();
 }
 
-const createOptions = (on: string, name: string): SpaceCreateOptions => ({ on, name, reuse: false, env: new Map(), services: new Map() });
+const createOptions = (on: string, name: string): SpaceCreateOptions => ({
+  ...(on ? { on } : {}),
+  name,
+  reuse: false,
+  env: new Map(),
+  services: new Map(),
+});
+
+export const hostSlotsFull = (limit: number) => `Refused: the server's ${limit} Spaces are all in use. Try again later.`;
+
+export function onHost(entry: SpaceInfo, hostRef: string): boolean {
+  if (!hostRef) return true;
+  const wanted = (hostRef.startsWith("host:") ? hostRef.slice("host:".length) : hostRef).toLowerCase();
+  return entry.host.toLowerCase() === wanted || entry.hostName.toLowerCase() === wanted;
+}
 
 export function createComputer(config: ComputerConfig, log: Log, deps: ComputerDeps = {}): Computer {
   const jobId = deps.jobId ?? (() => randomBytes(4).toString("hex"));
+  const describeError = (error: unknown) =>
+    error instanceof Error ? `${error.name}: ${error.message}`.replaceAll(config.token, "[token]").slice(0, 200) : "unknown";
   let client: Promise<SpacesPort> | undefined;
   const spaces = () => {
     client ??= (deps.spaces ?? (() => defaultSpaces(config)))().catch((error: unknown) => {
@@ -141,14 +152,16 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
     });
     return client;
   };
-  const ensureTurn = serialize();
-  const jobTurn = serialize();
+  const createTurn = serialize();
+  const hostUsed = (all: SpaceInfo[]) => all.filter((entry) => onHost(entry, config.hostRef)).length;
 
   const ensureSpace = (): Promise<SpacePort> =>
-    ensureTurn(async () => {
+    createTurn(async () => {
       const api = await spaces();
-      const found = (await api.list()).find((entry) => entry.name === config.spaceName);
+      const all = await api.list();
+      const found = all.find((entry) => entry.name === config.spaceName);
       if (!found) {
+        if (hostUsed(all) >= config.hostSlots) throw new Error(hostSlotsFull(config.hostSlots));
         const created = await api.create(createOptions(config.hostRef, config.spaceName));
         if (!created.space) throw new Error(`Space ${config.spaceName} was not created`);
         log("computer_space_created", { name: config.spaceName });
@@ -234,14 +247,16 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
     execute: async (args) => {
       const api = await spaces();
       const name = `${JOB_PREFIX}${jobId()}`;
-      const made = await jobTurn(async () => {
-        const running = (await jobSpaces(api)).length;
-        if (running >= config.jobSlots) return running;
+      const made = await createTurn(async () => {
+        const all = await api.list();
+        const running = all.filter((entry) => entry.name.startsWith(JOB_PREFIX)).length;
+        if (running >= config.jobSlots) return `Refused: ${running} job machines are already running and the limit is ${config.jobSlots}. Try again later.`;
+        if (hostUsed(all) >= config.hostSlots) return hostSlotsFull(config.hostSlots);
         const created = await api.create(createOptions(config.hostRef, name));
         if (!created.space) throw new Error(`Space ${name} was not created`);
         return created.space;
       });
-      if (typeof made === "number") return failure(`Refused: ${made} job machines are already running and the limit is ${config.jobSlots}. Try again later.`);
+      if (typeof made === "string") return failure(made);
       try {
         const result = await (await api.space(made.id)).bash(args.command, bashSeconds(args.timeoutSec));
         return succeeded(result) ? text(formatBash(result)) : failure(formatBash(result));
@@ -345,7 +360,6 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
   });
 
   const startup = async () => {
-    if (!config.hostRef) return;
     try {
       const api = await spaces();
       for (const entry of await jobSpaces(api)) {
@@ -363,7 +377,7 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
     }
   };
 
-  const linux = config.hostRef ? [run, write, read, job] : [];
+  const linux = [run, write, read, job];
   const macTools = config.macRef ? [status, messages, send, shot, act] : [];
   return { tools: [...linux, ...macTools] as readonly AnyGuardedTool[], startup };
 }

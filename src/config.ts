@@ -1,14 +1,15 @@
-import { join } from "node:path";
 import { DEFAULT_TIME_ZONE, isTimeZone } from "./clock.ts";
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
 export type ComputerConfig = {
-  readonly cuaHome: string;
+  readonly url: string;
+  readonly token: string;
   readonly spaceName: string;
   readonly hostRef: string;
   readonly macRef: string;
   readonly jobSlots: number;
+  readonly hostSlots: number;
 };
 
 export type Config = {
@@ -29,27 +30,45 @@ export type PhotonConfig = {
 export const DEFAULT_LLM_BASE_URL = "http://127.0.0.1:4000";
 export const DEFAULT_MODEL_GROUP = "tether";
 export const DEFAULT_SPACE_NAME = "tether";
+export const JOB_PREFIX = "tether-job-";
 export const DEFAULT_JOB_SLOTS = 2;
 export const MAX_JOB_SLOTS = 4;
+export const DEFAULT_HOST_SLOTS = 4;
+export const MAX_HOST_SLOTS = 64;
+export const CUA_NAMES = ["TETHER_CUA_URL", "TETHER_CUA_TOKEN"] as const;
 
-function jobSlots(value: string | undefined): number {
-  const text = value?.trim();
-  if (!text) return DEFAULT_JOB_SLOTS;
+function slots(env: Env, name: string, fallback: number, max: number): number {
+  const text = env[name]?.trim();
+  if (!text) return fallback;
   const parsed = Number(text);
-  if (!Number.isInteger(parsed) || parsed < 0 || parsed > MAX_JOB_SLOTS) throw new Error(`TETHER_CUA_JOB_SLOTS must be a whole number from 0 to ${MAX_JOB_SLOTS}`);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > max) throw new Error(`invalid environment: ${name} must be a whole number from 0 to ${max}`);
   return parsed;
 }
 
-export function loadComputerConfig(env: Env, stateDir: string): ComputerConfig | undefined {
-  const hostRef = env.TETHER_CUA_HOST?.trim() ?? "";
-  const macRef = env.TETHER_CUA_MAC?.trim() ?? "";
-  if (!hostRef && !macRef) return undefined;
+function loopbackUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    if ((url.protocol === "http:" || url.protocol === "https:") && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return value;
+  } catch {}
+  throw new Error("invalid environment: TETHER_CUA_URL must be an http(s) loopback URL");
+}
+
+export function loadComputerConfig(env: Env): ComputerConfig | undefined {
+  const url = env.TETHER_CUA_URL?.trim() ?? "";
+  const token = env.TETHER_CUA_TOKEN?.trim() ?? "";
+  if (!url && !token) return undefined;
+  const missing = CUA_NAMES.filter((name) => !env[name]?.trim());
+  if (missing.length > 0) throw new Error(`incomplete environment: ${missing.join(", ")}`);
+  const spaceName = env.TETHER_CUA_SPACE?.trim() || DEFAULT_SPACE_NAME;
+  if (spaceName.startsWith(JOB_PREFIX)) throw new Error(`invalid environment: TETHER_CUA_SPACE must not start with ${JOB_PREFIX}`);
   return {
-    cuaHome: env.TETHER_CUA_HOME?.trim() || join(stateDir, "cua"),
-    spaceName: env.TETHER_CUA_SPACE?.trim() || DEFAULT_SPACE_NAME,
-    hostRef,
-    macRef,
-    jobSlots: jobSlots(env.TETHER_CUA_JOB_SLOTS),
+    url: loopbackUrl(url),
+    token,
+    spaceName,
+    hostRef: env.TETHER_CUA_HOST?.trim() ?? "",
+    macRef: env.TETHER_CUA_MAC?.trim() ?? "",
+    jobSlots: slots(env, "TETHER_CUA_JOB_SLOTS", DEFAULT_JOB_SLOTS, MAX_JOB_SLOTS),
+    hostSlots: slots(env, "TETHER_CUA_HOST_SLOTS", DEFAULT_HOST_SLOTS, MAX_HOST_SLOTS),
   };
 }
 
@@ -78,7 +97,7 @@ export function loadConfig(env: Env): Config {
     llmBaseUrl: env.TETHER_LLM_BASE_URL?.trim() || DEFAULT_LLM_BASE_URL,
     stateDir,
     timeZone,
-    computer: loadComputerConfig(env, stateDir),
+    computer: loadComputerConfig(env),
   };
 }
 
