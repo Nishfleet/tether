@@ -38,6 +38,7 @@ describe("reminders across SIGKILL and restart", () => {
     model.enqueue(call("reminder_set", { text, inMinutes }), say("Set."));
     first.push(inbound("m1", `remind me: ${text}`));
     await first.logged("reply_sent");
+    await first.until(() => first.sent.length >= 1);
     assert.deepEqual(first.sent, ["Set."]);
   };
 
