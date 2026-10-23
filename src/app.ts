@@ -11,6 +11,7 @@ import {
   type Tx,
 } from "@earendil-works/pi-durable";
 import { createAssistExtension } from "./assist.ts";
+import { createCalendarExtension, type CalendarOptions } from "./calendar/tools.ts";
 import type { Channel, Inbound, InboundAttachment } from "./channel.ts";
 import { DEFAULT_TIME_ZONE } from "./clock.ts";
 import { classify } from "./control.ts";
@@ -55,6 +56,7 @@ export type TetherOptions = {
   readonly fetch?: Fetch;
   readonly reminderRecheckMs?: number;
   readonly settings?: HarnessSettings;
+  readonly calendar?: CalendarOptions;
 };
 
 export type Tether = {
@@ -88,6 +90,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
       log,
     }),
   );
+  if (options.calendar) registry.install(createCalendarExtension(options.calendar));
   const harness = await Harness.open(
     options.storage,
     {
