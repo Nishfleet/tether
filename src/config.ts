@@ -1,6 +1,16 @@
+import { isAbsolute } from "node:path";
 import { DEFAULT_TIME_ZONE, isTimeZone } from "./clock.ts";
 
 export type Env = Readonly<Record<string, string | undefined>>;
+
+export type ComputerConfig = {
+  readonly url: string;
+  readonly token: string;
+  readonly spaceName: string;
+  readonly hostRef: string;
+  readonly jobSlots: number;
+  readonly hostSlots: number;
+};
 
 export type Config = {
   readonly allowedSender: string;
@@ -9,6 +19,7 @@ export type Config = {
   readonly modelGroup: string;
   readonly stateDir: string;
   readonly timeZone: string;
+  readonly computer: ComputerConfig | undefined;
 };
 
 export type PhotonConfig = {
@@ -18,6 +29,44 @@ export type PhotonConfig = {
 
 export const DEFAULT_LLM_BASE_URL = "http://127.0.0.1:4000";
 export const DEFAULT_MODEL_GROUP = "tether";
+export const DEFAULT_SPACE_NAME = "tether";
+export const JOB_PREFIX = "tether-job-";
+export const DEFAULT_JOB_SLOTS = 2;
+export const MAX_JOB_SLOTS = 4;
+export const DEFAULT_HOST_SLOTS = 4;
+export const MAX_HOST_SLOTS = 64;
+
+function slots(env: Env, name: string, fallback: number, max: number): number {
+  const text = env[name]?.trim();
+  if (!text) return fallback;
+  const parsed = Number(text);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > max) throw new Error(`invalid environment: ${name} must be a whole number from 0 to ${max}`);
+  return parsed;
+}
+
+function daemonAddress(value: string): string {
+  if (isAbsolute(value)) return value;
+  try {
+    const url = new URL(value);
+    if ((url.protocol === "http:" || url.protocol === "https:") && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return value;
+  } catch {}
+  throw new Error("invalid environment: TETHER_CUA_URL must be an absolute socket path or an http(s) loopback URL");
+}
+
+export function loadComputerConfig(env: Env): ComputerConfig | undefined {
+  const url = env.TETHER_CUA_URL?.trim() ?? "";
+  if (!url) return undefined;
+  const spaceName = env.TETHER_CUA_SPACE?.trim() || DEFAULT_SPACE_NAME;
+  if (spaceName.startsWith(JOB_PREFIX)) throw new Error(`invalid environment: TETHER_CUA_SPACE must not start with ${JOB_PREFIX}`);
+  return {
+    url: daemonAddress(url),
+    token: env.TETHER_CUA_TOKEN?.trim() ?? "",
+    spaceName,
+    hostRef: env.TETHER_CUA_HOST?.trim() ?? "",
+    jobSlots: slots(env, "TETHER_CUA_JOB_SLOTS", DEFAULT_JOB_SLOTS, MAX_JOB_SLOTS),
+    hostSlots: slots(env, "TETHER_CUA_HOST_SLOTS", DEFAULT_HOST_SLOTS, MAX_HOST_SLOTS),
+  };
+}
 
 function required(env: Env, names: readonly string[]): Record<string, string> {
   const found: Record<string, string> = {};
@@ -44,6 +93,7 @@ export function loadConfig(env: Env): Config {
     llmBaseUrl: env.TETHER_LLM_BASE_URL?.trim() || DEFAULT_LLM_BASE_URL,
     stateDir,
     timeZone,
+    computer: loadComputerConfig(env),
   };
 }
 

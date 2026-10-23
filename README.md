@@ -59,8 +59,9 @@ without the model. Text `RESUME` to continue.
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
   `reminder_list`, `reminder_cancel`, `location_request`, `location_last`,
-  `places_nearby` and `text_owner`, plus the calendar and contacts tools when an account is connected (see
-  Calendar and contacts). Nothing else. Any tool that can act for Nish carries
+  `places_nearby` and `text_owner`, plus the calendar and contacts tools when an
+  account is connected (see Calendar and contacts) and its own computer when
+  configured (see Its own computer). Nothing else. Any tool that can act for Nish carries
   `askFirst`; see Safety rules.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
@@ -261,6 +262,12 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 | `TETHER_TIMEZONE` | no | IANA zone for reminder times, default `Asia/Kolkata` |
 | `TETHER_LLM_BASE_URL` | no | router base URL, default `http://127.0.0.1:4000`; `/v1` is appended unless the path already ends in it |
 | `TETHER_STATE_DIR` | no | state directory; falls back to `STATE_DIRECTORY`, which systemd sets to `/var/lib/tether` |
+| `TETHER_CUA_URL` | no | how to reach the server's Cua daemon: an absolute unix socket path such as `/run/cua-agents/cua.sock`, or an `http(s)://127.0.0.1:<port>` loopback URL (any other host is refused). It alone decides: unset, and no computer tool exists |
+| `TETHER_CUA_TOKEN` | no | the daemon's token, only for a loopback URL; a socket needs none. Never logged |
+| `TETHER_CUA_HOST` | no | Cua host provider for new Spaces, for example `host:netcup`; empty uses the daemon's default location |
+| `TETHER_CUA_SPACE` | no | name of its own Space, default `tether`; must not start with `tether-job-` |
+| `TETHER_CUA_JOB_SLOTS` | no | most throwaway job Spaces at once, 0 to 4, default 2 |
+| `TETHER_CUA_HOST_SLOTS` | no | the server's Space limit that every new Space counts against, default 4 |
 
 State is one SQLite file, `tether.sqlite`, in the state directory.
 
@@ -376,6 +383,42 @@ child process, kills it with SIGKILL mid-model-call and mid-send, restarts it on
 the same state directory and checks that the reply is delivered, that the thread
 and memory notes are still there, and that STOP survives the kill.
 
+## Its own computer
+
+Tether has its own Cua Linux Space and throwaway job Spaces on the server
+(`Nishfleet/tether#7`). It has no access to Nish's Mac or any other computer of
+his. All of it is Pi Durable tools in `src/computer.ts`
+calling the `@trycua/cua` SDK in this process through `connect(url)` or
+`connect(url, token)`: the server's Cua daemon, reached over a shared unix
+socket (or loopback with a token), the same agent login every agent on the
+server uses. No MCP bridge, no `cua` CLI, no agent harness.
+Every agent gets its own Space, so the logs show who did what: Tether's is
+`tether` and its jobs are `tether-job-<id>`.
+
+- `computer_run`, `computer_write`, `computer_read`: the persistent Linux Space
+  named `TETHER_CUA_SPACE`, created on `TETHER_CUA_HOST` if missing and started
+  if stopped, before every call.
+- `job_run`: one command in a fresh `tether-job-<id>` Space, deleted when the
+  command ends, even when it fails. Two limits, both checked before creating:
+  `TETHER_CUA_JOB_SLOTS` job Spaces of Tether's own, and the server's
+  `TETHER_CUA_HOST_SLOTS` Spaces in total, counting every Space on the host
+  whoever owns it (`the server's 4 Spaces are all in use`).
+- On start Tether deletes leftover Spaces named `tether-job-*` (only those,
+  never `desk` or another agent's Space) and ensures its own Space. If the
+  server has no free slot for it, that is logged as `computer_startup_failed`,
+  Tether takes nobody else's Space, and chat keeps working; the next computer
+  call tries again. Pi Durable 1.4.0 has no extension start hook, so `run` in
+  `src/main.ts` calls it.
+
+Setup: `fleet-ops` puts `TETHER_CUA_URL` (the shared socket, or a loopback URL
+with `TETHER_CUA_TOKEN`) in `/etc/tether/tether.env`. Tether needs no Cua login
+or device of its own. None of the four computer tools asks first: they only
+reach Tether's own Spaces, which hold none of Nish's credentials.
+
+Switch it off: unset `TETHER_CUA_URL`, or remove the
+`createComputer` lines from `src/main.ts`. Delete it: remove `src/computer*`,
+its tests, the `@trycua/cua` dependency, and run `cua spaces delete tether`.
+
 ## Safety rules
 
 Every rule below is enforced by code or by the host, never by a line in the
@@ -390,6 +433,13 @@ model's prompt. A rule that only the host can enforce says so.
 | NO, silence for 24 hours, and STOP cancel a pending approval | Yes | `answer`, `expire` and `cancelAll` in `src/approval.ts` | `tests/approval.test.ts` "cancels on NO: the tool never runs and the model is told", "cancels after silence and tells the model" and "cancels the pending approval on STOP, and a later YES runs nothing" |
 | A pending approval survives a restart and is never asked twice | Yes | the approval document, `api.memo` and one durable key per call | `tests/crash.test.ts` "keeps a pending approval across a kill, asks once, and runs the tool only on YES" and "keeps a pending approval across a clean restart too" |
 | Money is a hard no | Yes, for a tool that declares `money: true`: the hook blocks it with no question. No payment tool exists | `beforeTool` hook in `src/approval.ts` | `tests/approval.test.ts` "blocks a money tool outright, with no question to Nish". A tool that moves money without declaring it is stopped only by review. |
+| Tether has no access to Nish's Mac or any other computer of his | Yes: there is no such tool, and the set of tools and of `askFirst` tools is pinned | `src/computer.ts` | `tests/computer.test.ts` "offers exactly four tools, none of which asks first, so a new tool forces a decision" |
+| No Nish credential reaches its Spaces | Yes: every Space is created with an empty environment and the daemon token is never passed to one | `createOptions` in `src/computer.ts` | `tests/computer.test.ts` "creates every Space with an empty environment and sends the token nowhere" |
+| Tether only touches its own Spaces: `start`, `delete_`, `space` and `create` refuse anything that is not the Space named `TETHER_CUA_SPACE` or a `tether-job-*` Space on the configured host. Cua itself does not enforce this, because all agents share the server's Cua login | Yes | `guardSpaces` in `src/computer.ts`, applied the moment the Cua handle is built, so every tool and the sweep go through it | `tests/computer.test.ts` "refuses every write path for desk and another agent's Space, by id and by name", "refuses Spaces that are unknown, on another host, or whose name also matches one on another host", "refuses to create anything but tether or tether-job-*, or on another host" and "is the only handle the tools and the sweep get, so a desk Space is never touched by them" |
+| A file read never pulls more than 100000 bytes and refuses anything but a regular file; a hostile path stays one quoted word | Yes | `readCommand` in `src/computer.ts` runs `head -c` inside the Space | `tests/computer.test.ts` "pulls at most the first 100000 bytes of a large file and says it cut", "refuses a binary file, a directory, a missing file and a device without reading them", "fails loudly on an unreadable file instead of returning it empty", "fails when the read comes back shorter than the file" and "keeps a hostile path inside one quoted word" |
+| Job Spaces are capped, always deleted, and never take the server's last slots; leftovers are swept at start | Yes | `job_run` and `startup` in `src/computer.ts` | `tests/computer.test.ts` "refuses at the slot cap while that many jobs run, without creating anything", "refuses when the server's Spaces are all in use, whoever owns them, without creating anything", "deletes the Space even when the command throws", "never exceeds the cap when jobs start together" "never exceeds the host limit when its own Space and a job are created together" and "sweeps a leaked job Space on the host before counting, so it no longer blocks a new job" |
+| The start sweep and its own Space never touch another agent's Space | Yes | `startup` and `ensureSpace` in `src/computer.ts` | `tests/computer.test.ts` "only ever deletes tether-job-* Spaces, never desk, another agent's Space or a near miss" and "refuses to create its own Space when every host slot is taken, and touches nobody else's" and "never adopts a same-named Space on another host" |
+| The daemon is reached only over a socket path or loopback, and any token goes into no log | Yes | `loadComputerConfig` in `src/config.ts`; `describeError` in `src/computer.ts` | `tests/computer.test.ts` "accepts a socket path or a loopback URL only, and never echoes the token" and "never puts the token in a log line" |
 | Scoped keys: each credential is the narrowest the provider offers, in a root-owned env file | No. The provider's key scope and file permissions enforce it. The app reads only named variables and logs no secret | host config in `Nishfleet/fleet-ops` | `tests/unit.test.ts` "names every missing variable and never echoes a value"; `tests/crash.test.ts` "does not leak message text or handles into its logs". The scope itself has no test here. |
 | Firewall: the service account reaches only its allowed hosts | No. The host firewall enforces it | host config in `Nishfleet/fleet-ops`; each new outbound path ships with a real call as proof | none in this repo |
 
