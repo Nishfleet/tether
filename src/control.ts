@@ -4,6 +4,8 @@ export type Verdict =
   | { readonly kind: "ignore"; readonly reason: "sender_not_allowed" | "not_direct" | "not_text" }
   | { readonly kind: "stop" }
   | { readonly kind: "resume" }
+  | { readonly kind: "yes"; readonly text: string }
+  | { readonly kind: "no"; readonly text: string }
   | { readonly kind: "chat"; readonly text: string };
 
 export function classify(message: Inbound, allowedSender: string): Verdict {
@@ -16,5 +18,7 @@ export function classify(message: Inbound, allowedSender: string): Verdict {
   const command = text.toUpperCase();
   if (command === "STOP") return { kind: "stop" };
   if (command === "RESUME") return { kind: "resume" };
+  if (command === "YES") return { kind: "yes", text };
+  if (command === "NO") return { kind: "no", text };
   return { kind: "chat", text };
 }

@@ -27,6 +27,7 @@ export type Reply = (
   | { kind: "cut"; text: string }
   | { kind: "tool"; name: string; args: Record<string, unknown> }
   | { kind: "toolText"; text: string; name: string; args: Record<string, unknown> }
+  | { kind: "tools"; calls: { name: string; args: Record<string, unknown> }[] }
   | { kind: "hold" }
   | { kind: "fail" }
 ) & { via?: Via };
@@ -119,6 +120,18 @@ export class FakeModel {
         role: "assistant",
         content: reply.text,
         tool_calls: [{ index: 0, id: `call_${index}`, type: "function", function: { name: reply.name, arguments: JSON.stringify(reply.args) } }],
+      };
+      res.write(`data: ${JSON.stringify(chunk(delta, null))}\n\n`);
+      res.write(`data: ${JSON.stringify(chunk({}, "tool_calls"))}\n\n`);
+    } else if (reply.kind === "tools") {
+      const delta = {
+        role: "assistant",
+        tool_calls: reply.calls.map((entry, position) => ({
+          index: position,
+          id: `call_${index}_${position}`,
+          type: "function",
+          function: { name: entry.name, arguments: JSON.stringify(entry.args) },
+        })),
       };
       res.write(`data: ${JSON.stringify(chunk(delta, null))}\n\n`);
       res.write(`data: ${JSON.stringify(chunk({}, "tool_calls"))}\n\n`);

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { STOPPED_TEXT } from "../src/app.ts";
+import { askText } from "../src/approval.ts";
 import { BACK_TEXT, FALLBACK_PREFIX } from "../src/tier.ts";
 import { BACKUP_VIA, FakeModel, call, flatten, hold, inbound, say, via } from "./helpers.ts";
 import { commitStopWithoutAbort } from "./offline.ts";
@@ -200,5 +201,57 @@ describe("tether process, killed with SIGKILL and restarted", () => {
     await second.until(() => second.sent.length >= 1);
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.deepEqual(second.sent, ["backup two"], "no second notice for the same tier");
+  });
+
+  it("keeps a pending approval across a kill, asks once, and runs the tool only on YES", opts, async () => {
+    model.enqueue(call("send_text", { to: "bob" }));
+    const first = await start();
+    first.push(inbound("m1", "text bob hi"));
+    await first.logged("reply_sent");
+    assert.deepEqual(first.sent, [askText("Send a text to bob.")]);
+    await first.kill9();
+
+    model.enqueue(say("Sent it."));
+    const second = await start();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.deepEqual(second.sent, [], "the question was not asked again");
+    assert.deepEqual(second.ran, [], "nothing ran while the approval was pending");
+    second.push(inbound("m2", "YES"));
+    await second.until(() => second.sent.length >= 1);
+    assert.deepEqual(second.ran, ["send_text:bob"]);
+    assert.deepEqual(second.sent, ["Sent it."]);
+    assert.equal(await second.terminate(), 0);
+    assert.deepEqual(second.ran, ["send_text:bob"], "ran exactly once");
+  });
+
+  it("cancels on NO after a kill", opts, async () => {
+    model.enqueue(call("send_text", { to: "bob" }));
+    const first = await start();
+    first.push(inbound("m1", "text bob hi"));
+    await first.logged("reply_sent");
+    await first.kill9();
+
+    model.enqueue(say("Cancelled."));
+    const second = await start();
+    second.push(inbound("m2", "NO"));
+    await second.until(() => second.sent.length >= 1);
+    assert.deepEqual(second.sent, ["Cancelled."]);
+    assert.deepEqual(second.ran, []);
+  });
+
+  it("keeps a pending approval across a clean restart too", opts, async () => {
+    model.enqueue(call("send_text", { to: "bob" }));
+    const first = await start();
+    first.push(inbound("m1", "text bob hi"));
+    await first.logged("reply_sent");
+    assert.equal(await first.terminate(), 0);
+
+    model.enqueue(say("Sent it."));
+    const second = await start();
+    second.push(inbound("m2", "YES"));
+    await second.until(() => second.sent.length >= 1);
+    assert.deepEqual(second.sent, ["Sent it."]);
+    assert.deepEqual(second.ran, ["send_text:bob"]);
+    assert.deepEqual(first.ran, []);
   });
 });

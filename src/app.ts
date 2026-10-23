@@ -3,6 +3,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
   createRegistry,
+  defineExtension,
   Harness,
   type Conversation,
   type HarnessSettings,
@@ -11,6 +12,7 @@ import {
   type Tx,
 } from "@earendil-works/pi-durable";
 import type { Channel, Inbound } from "./channel.ts";
+import { answer, cancelAll, createApprovalExtension, hasAsked, rememberSpace, Wakeups, type AnyGuardedTool } from "./approval.ts";
 import { classify } from "./control.ts";
 import { type Pending, SEEN_LIMIT, StateDoc } from "./docs.ts";
 import type { Log } from "./log.ts";
@@ -41,6 +43,8 @@ export type TetherOptions = {
   readonly log: Log;
   readonly retryBaseMs?: number;
   readonly settings?: HarnessSettings;
+  readonly tools?: readonly AnyGuardedTool[];
+  readonly approvalTtlMs?: number;
 };
 
 export type Tether = {
@@ -64,6 +68,16 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
   const task = createReplyTask({ channel, log, retryBaseMs: options.retryBaseMs ?? 5000, group: options.model.modelId });
   const registry = createRegistry();
   registry.install(createMemoryExtension([task]));
+  if (options.tools?.length) registry.install(defineExtension({ name: "tether-tools", tools: options.tools }));
+  const wakeups = new Wakeups();
+  let current: Conversation | undefined;
+  const root = (): Conversation => {
+    if (!current) throw new Error("root conversation is not open yet");
+    return current;
+  };
+  const notify = (tx: Tx, space: string, text: string) => queue(tx, notice(space, text));
+  const lookup = (name: string) => registry.snapshot().tools().find((entry) => entry.tool.name === name)?.tool as AnyGuardedTool | undefined;
+  registry.install(createApprovalExtension({ root, context, lookup, notify, wakeups, log, ...(options.approvalTtlMs === undefined ? {} : { ttlMs: options.approvalTtlMs }) }));
   const harness = await Harness.open(
     options.storage,
     {
@@ -75,8 +89,9 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
     },
     context,
   );
-  const root: Conversation = await harness.root(context, { agent: { model: options.model, instructions: INSTRUCTIONS } });
-  await root.configure({ model: options.model, instructions: INSTRUCTIONS }, context);
+  current = await harness.root(context, { agent: { model: options.model, instructions: INSTRUCTIONS } });
+  const chat = current;
+  await chat.configure({ model: options.model, instructions: INSTRUCTIONS }, context);
 
   const claim = (state: { seen: string[] }, id: string): boolean => {
     if (state.seen.includes(id)) return false;
@@ -86,22 +101,23 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
   };
 
   const queue = async (tx: Tx, input: ReplyInput) => {
-    await tx.createTask(task, input, { ownership: { kind: "conversation" }, conversationId: root.id });
+    await tx.createTask(task, input, { ownership: { kind: "conversation" }, conversationId: chat.id });
   };
 
   const onChat = (message: Inbound, text: string) =>
-    root.commit(async (tx) => {
+    chat.commit(async (tx) => {
       const state = await tx.doc(StateDoc);
       if (!claim(state, message.id)) return "duplicate";
       if (state.stopped) return "stopped";
       const item: Pending = { inbound: message.id, space: message.space, prompt: text, run: 0 };
       state.inflight.push(item);
+      await rememberSpace(tx, message.space);
       await queue(tx, reply(item));
       return "accepted";
     }, context);
 
   const onStop = async (message: Inbound) => {
-    const outcome = await root.commit(async (tx) => {
+    const outcome = await chat.commit(async (tx) => {
       const state = await tx.doc(StateDoc);
       if (!claim(state, message.id)) return "duplicate";
       if (state.stopped) {
@@ -109,18 +125,27 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
         return "already_stopped";
       }
       state.stopped = true;
+      await cancelAll(tx);
       state.held.push(...state.inflight.map((item) => ({ ...item })));
       state.inflight.splice(0, state.inflight.length);
       return "stopped";
     }, context);
     if (outcome !== "stopped") return outcome;
-    await root.abort(context);
-    await root.commit((tx) => queue(tx, notice(message.space, STOPPED_TEXT)), context);
+    await chat.abort(context);
+    await chat.commit((tx) => queue(tx, notice(message.space, STOPPED_TEXT)), context);
     return outcome;
   };
 
+  const onAnswer = (message: Inbound, approve: boolean) =>
+    chat.commit(async (tx) => {
+      if (!(await hasAsked(tx))) return "none";
+      const state = await tx.doc(StateDoc);
+      if (!claim(state, message.id)) return "duplicate";
+      return answer(tx, approve, notify);
+    }, context);
+
   const onResume = (message: Inbound) =>
-    root.commit(async (tx) => {
+    chat.commit(async (tx) => {
       const state = await tx.doc(StateDoc);
       if (!claim(state, message.id)) return "duplicate";
       if (!state.stopped) {
@@ -144,12 +169,18 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
       log("ignored", { id: message.id, reason: verdict.reason, from: fingerprint(salt, message.sender) });
       return;
     }
-    const outcome =
-      verdict.kind === "stop" ? await onStop(message) : verdict.kind === "resume" ? await onResume(message) : await onChat(message, verdict.text);
+    let outcome: string;
+    if (verdict.kind === "stop") outcome = await onStop(message);
+    else if (verdict.kind === "resume") outcome = await onResume(message);
+    else if (verdict.kind === "yes" || verdict.kind === "no") {
+      outcome = await onAnswer(message, verdict.kind === "yes");
+      if (outcome === "none") outcome = await onChat(message, verdict.text);
+    } else outcome = await onChat(message, verdict.text);
+    wakeups.wake();
     log("handled", { id: message.id, kind: verdict.kind, outcome });
   };
 
-  if ((await harness.snapshot(StateDoc, context))?.stopped) await root.abort(context);
+  if ((await harness.snapshot(StateDoc, context))?.stopped) await chat.abort(context);
   harness.resume();
   log("started");
 

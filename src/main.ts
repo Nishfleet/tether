@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { startTether, type Tether } from "./app.ts";
+import type { AnyGuardedTool } from "./approval.ts";
 import type { Channel } from "./channel.ts";
 import { type Env, loadConfig } from "./config.ts";
 import type { Log } from "./log.ts";
@@ -14,7 +15,7 @@ export async function run(
   env: Env,
   openChannel: (env: Env, log: Log) => Promise<Channel>,
   log: Log,
-  overrides: { retryBaseMs?: number } = {},
+  overrides: { retryBaseMs?: number; tools?: readonly AnyGuardedTool[] } = {},
 ): Promise<Tether> {
   const config = loadConfig(env);
   mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
@@ -31,5 +32,6 @@ export async function run(
     salt: loadSalt(config.stateDir),
     log,
     ...(overrides.retryBaseMs === undefined ? {} : { retryBaseMs: overrides.retryBaseMs }),
+    ...(overrides.tools === undefined ? {} : { tools: overrides.tools }),
   });
 }
