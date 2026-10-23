@@ -77,12 +77,12 @@ describe("reminders across SIGKILL and restart", () => {
 
   it("keeps two reminders that came due during STOP across a kill and sends each once after RESUME", opts, async () => {
     const first = await start();
-    model.enqueue(call("reminder_set", { text: "alpha", inMinutes: 0.04 }), say("Set alpha."), call("reminder_set", { text: "beta", inMinutes: 0.04 }), say("Set beta."));
+    model.enqueue(call("reminder_set", { text: "alpha", inMinutes: 0.06 }), say("Set alpha."), call("reminder_set", { text: "beta", inMinutes: 0.03 }), say("Set beta."));
     first.push(inbound("m1", "remind me alpha"));
     await first.until(() => first.sent.includes("Set alpha."));
     first.push(inbound("m2", "remind me beta"));
     await first.until(() => first.sent.includes("Set beta."));
-    const overdueAt = Date.now() + 0.04 * 60000 + 1500;
+    const overdueAt = Date.now() + 0.06 * 60000 + 1500;
     first.push(inbound("m3", "STOP"));
     await first.until(() => first.sent.includes(STOPPED_TEXT));
     await new Promise((resolve) => setTimeout(resolve, Math.max(0, overdueAt - Date.now())));
@@ -95,6 +95,7 @@ describe("reminders across SIGKILL and restart", () => {
     second.push(inbound("m4", "RESUME"));
     await second.until(() => second.sent.length >= 3);
     assert.deepEqual([...second.sent].sort(), ["Resumed.", `${REMINDER_PREFIX}alpha`, `${REMINDER_PREFIX}beta`].sort());
+    assert.ok(second.sent.indexOf(`${REMINDER_PREFIX}beta`) < second.sent.indexOf(`${REMINDER_PREFIX}alpha`), "earliest due first, not first created");
     await second.logged("reply_sent", 3);
     await second.kill9();
 

@@ -88,7 +88,7 @@ const noticeOf = (space: string, body: string): ReplyInput => ({ space, inbound:
 export async function releaseHeldReminders(tx: Tx, reply: Task<ReplyInput, ReplyState, null, object>, conversationId: ConversationId): Promise<number> {
   const reminders = await tx.doc(RemindersDoc);
   const owner = await tx.doc(OwnerDoc);
-  const held = reminders.items.filter((item) => item.held);
+  const held = reminders.items.filter((item) => item.held).sort((a, b) => a.at - b.at);
   for (const item of held) {
     const space = item.space ?? owner.space;
     reminders.items.splice(reminders.items.indexOf(item), 1);
