@@ -1,3 +1,5 @@
+import { DEFAULT_TIME_ZONE, isTimeZone } from "./clock.ts";
+
 export type Env = Readonly<Record<string, string | undefined>>;
 
 export type Config = {
@@ -6,6 +8,7 @@ export type Config = {
   readonly llmApiKey: string;
   readonly modelGroup: string;
   readonly stateDir: string;
+  readonly timeZone: string;
 };
 
 export type PhotonConfig = {
@@ -32,12 +35,15 @@ export function loadConfig(env: Env): Config {
   const { TETHER_ALLOWED_SENDER, TETHER_LLM_API_KEY } = required(env, ["TETHER_ALLOWED_SENDER", "TETHER_LLM_API_KEY"]);
   const stateDir = env.TETHER_STATE_DIR?.trim() || env.STATE_DIRECTORY?.trim();
   if (!stateDir) throw new Error("missing environment: TETHER_STATE_DIR or STATE_DIRECTORY");
+  const timeZone = env.TETHER_TIMEZONE?.trim() || DEFAULT_TIME_ZONE;
+  if (!isTimeZone(timeZone)) throw new Error("invalid environment: TETHER_TIMEZONE");
   return {
     allowedSender: TETHER_ALLOWED_SENDER as string,
     llmApiKey: TETHER_LLM_API_KEY as string,
     modelGroup: env.TETHER_MODEL_GROUP?.trim() || DEFAULT_MODEL_GROUP,
     llmBaseUrl: env.TETHER_LLM_BASE_URL?.trim() || DEFAULT_LLM_BASE_URL,
     stateDir,
+    timeZone,
   };
 }
 

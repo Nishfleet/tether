@@ -30,6 +30,7 @@ export async function run(
     allowedSender: config.allowedSender,
     salt: loadSalt(config.stateDir),
     log,
+    timeZone: config.timeZone,
     ...(overrides.retryBaseMs === undefined ? {} : { retryBaseMs: overrides.retryBaseMs }),
   });
 }

@@ -1,10 +1,12 @@
 import { Spectrum } from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
-import type { Channel, Inbound } from "./channel.ts";
+import type { Channel, Inbound, InboundAttachment } from "./channel.ts";
 import type { PhotonConfig } from "./config.ts";
 import type { Log } from "./log.ts";
 
 type SpaceRef = readonly [id: string, phone: string];
+
+type AttachmentInfo = { fileName: string; mimeType: string; guid: string; totalBytes: number };
 
 export async function spectrumChannel(photon: PhotonConfig, log: Log): Promise<Channel> {
   const app = await Spectrum({
@@ -23,12 +25,26 @@ export async function spectrumChannel(photon: PhotonConfig, log: Log): Promise<C
         continue;
       }
       const ref: SpaceRef = [space.id, space.phone];
+      const phone = space.phone;
+      const described = (message as { attachmentMetadata?: readonly AttachmentInfo[] }).attachmentMetadata ?? [];
+      const attachments: InboundAttachment[] = described.map((info) => ({
+        fileName: info.fileName,
+        mimeType: info.mimeType,
+        size: info.totalBytes,
+        read: async () => {
+          const found = await provider.getAttachment(info.guid, phone);
+          if (!found) throw new Error("attachment not found");
+          return found.read();
+        },
+      }));
+      if (message.content.type !== "text") log("inbound_content", { id: message.id, type: message.content.type, attachments: attachments.length });
       yield {
         id: message.id,
         sender: message.sender?.id ?? "",
         space: JSON.stringify(ref),
         direct: space.type === "dm",
         text: message.content.type === "text" ? message.content.text : undefined,
+        attachments,
       };
     }
   }
