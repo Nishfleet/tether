@@ -59,7 +59,8 @@ without the model. Text `RESUME` to continue.
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
   `reminder_list`, `reminder_cancel`, `location_request`, `location_last` and
-  `places_nearby`. Nothing else.
+  `places_nearby`, plus the calendar and contacts tools when an account is connected (see
+  Calendar and contacts). Nothing else.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
   model group once the context passes `contextWindow - 16384` tokens
@@ -272,6 +273,71 @@ npm ci
 npm run build
 npm start
 ```
+
+## Calendar and contacts
+
+Phase 2 of `Nishfleet/tether#7`. Google and iCloud, each optional. With neither
+connected, no calendar tool exists. A half-set account (some variables, not all)
+stops the start with an error that names the missing variables.
+
+| Tool | What it does | Needs approval |
+| --- | --- | --- |
+| `calendar_list` | events between two times, both accounts merged in time order; the same event on both is shown once | no |
+| `calendar_create` | an event with nobody else invited, in Google or iCloud | no |
+| `calendar_invite` | an event with guests (Google sends the invitation; iCloud's server does) | yes, `askFirst` |
+| `contacts_find` | people by part of a name, phone or email, both accounts merged | no |
+| `contacts_add` | a new contact with a phone or an email | yes, `askFirst` |
+
+The two approval tools carry `askFirst: true` on their registration. The hook
+that stops them until the owner says yes ships with the ask-first change. A
+guest list cannot be put on `calendar_create`: it has no such field, and a test
+checks that guests the model passes anyway are dropped.
+
+Libraries: `@googleapis/calendar`, `@googleapis/people` and `google-auth-library`
+(Google's own), `tsdav` for CalDAV and CardDAV, `ical.js` to read and write the
+iCalendar and vCard text. Google scopes: `calendar.events`,
+`calendar.calendarlist.readonly` and `contacts`, nothing wider.
+
+Calendar text, guest names and contact fields are untrusted. A result is wrapped
+in `<untrusted_calendar_data>` or `<untrusted_contact_data>` with a line saying
+not to follow instructions inside, each field is flattened to one line, tags and
+control characters are removed and the length is capped. Event descriptions and
+contact notes are never read out of the accounts, so they cannot reach the
+model. Approval tools are `replay: unsafe`, so a crash never repeats a write.
+The server URLs are constants in code, not settings, so no text can point the
+tools at another host.
+
+| Name | Meaning |
+| --- | --- |
+| `TETHER_GOOGLE_CLIENT_ID`, `TETHER_GOOGLE_CLIENT_SECRET`, `TETHER_GOOGLE_REFRESH_TOKEN` | the Google account, all three or none |
+| `TETHER_ICLOUD_APPLE_ID`, `TETHER_ICLOUD_APP_PASSWORD` | the iCloud account, both or none; an app-specific password, never the Apple ID password |
+
+Times without an offset are read and shown in `TETHER_TIMEZONE` (table above).
+
+In production these live in `/etc/tether/calendar.env` (root:tether 0640, never
+in git), loaded by the unit next to the other two env files.
+
+### Connect an account
+
+Run as root on the host. Nothing is pasted into a chat; the secrets go only into
+the terminal and the file.
+
+```sh
+node /opt/tether/current/dist/setup.js google
+node /opt/tether/current/dist/setup.js icloud
+systemctl restart tether-agent.service
+```
+
+`google` asks for the OAuth client id and secret (a Desktop app client with the
+Calendar and People APIs enabled, and the consent screen set to In production,
+because a refresh token from a Testing screen dies after 7 days), prints a
+consent link with PKCE, and asks for the address the browser lands on after
+consent (the page does not load, the address holds the code). It then makes a
+real calendar and contacts read with the new token and only then writes the
+file. `icloud` asks for the Apple ID and an app-specific password
+(appleid.apple.com, Sign-In and Security) and also proves the login with a real
+read before it writes. Each command merges its own variables into the file and
+keeps the rest.
 
 ## Tests
 
