@@ -5,7 +5,7 @@ import { createFindMy, type FindMyDeps, MIN_TOKEN_MS, SHARED_ADDRESS } from "../
 
 type Calls = { issued: number; opened: { address: string; token: string }[]; closed: number; gets: string[]; requests: { chat: string; address: string }[] };
 
-function rig(overrides: { type?: "shared" | "dedicated"; get?: () => Promise<unknown>; request?: () => Promise<unknown>; expiresIn?: number } = {}) {
+function rig(overrides: { issueGate?: Promise<void>; type?: "shared" | "dedicated"; get?: () => Promise<unknown>; request?: () => Promise<unknown>; expiresIn?: number } = {}) {
   const calls: Calls = { issued: 0, opened: [], closed: 0, gets: [], requests: [] };
   let clock = 1_000_000;
   const logs: { event: string; fields: Record<string, unknown> }[] = [];
@@ -13,6 +13,7 @@ function rig(overrides: { type?: "shared" | "dedicated"; get?: () => Promise<unk
     now: () => clock,
     sharedAddress: SHARED_ADDRESS,
     issue: async () => {
+      await overrides.issueGate;
       calls.issued += 1;
       const expiresIn = overrides.expiresIn ?? 3600;
       return overrides.type === "dedicated"
@@ -95,6 +96,56 @@ describe("Find My locations", () => {
     assert.equal(await bad.find.request(JSON.stringify(["chat", "+1"])), false);
     assert.equal(bad.logs[0]?.event, "findmy_failed");
     assert.equal(await bad.find.request("not json"), false);
+  });
+
+  it("issues one token for overlapping calls and never closes a client that is still in use", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { find, calls, tick } = rig({
+      expiresIn: 100,
+      get: async () => {
+        await gate;
+        return { latitude: 1, longitude: 2, locationType: "live" };
+      },
+    });
+    const first = Promise.all([find.current(), find.current(), find.current()]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls.issued, 1);
+    tick(100 * 1000);
+    const late = find.current();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls.issued, 2);
+    assert.equal(calls.closed, 0, "the old client is still in use");
+    release();
+    const results = await Promise.all([first, late]);
+    assert.equal(results[0].every((entry) => entry?.latitude === 1), true);
+    assert.equal(results[1]?.latitude, 1);
+    assert.equal(calls.closed, 1, "closed once nothing used it");
+  });
+
+  it("does not open a client when closed while a token is being issued", async () => {
+    let finish!: () => void;
+    const { find, calls } = rig({ issueGate: new Promise<void>((resolve) => (finish = resolve)) });
+    const pending = find.current();
+    await find.close();
+    finish();
+    assert.equal(await pending, undefined);
+    assert.deepEqual(calls.opened, []);
+  });
+
+  it("ignores coordinates with no timestamp unless the location is live", async () => {
+    const stale = rig({ get: async () => ({ latitude: 1, longitude: 2, locationType: "legacy" }) });
+    assert.equal(await stale.find.current(), undefined);
+    const live = rig({ get: async () => ({ latitude: 1, longitude: 2, locationType: "live" }) });
+    assert.deepEqual(await live.find.current(), { latitude: 1, longitude: 2, label: null, at: 1_000_000 });
+  });
+
+  it("refreshes a token that lives less than the old 30 second floor", async () => {
+    const { find, calls, tick } = rig({ expiresIn: 10 });
+    await find.current();
+    tick(8_001);
+    await find.current();
+    assert.equal(calls.issued, 2);
   });
 
   it("closes its client on close", async () => {

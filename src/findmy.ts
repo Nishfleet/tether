@@ -15,7 +15,7 @@ export type FindMyDeps = {
 
 export const SHARED_ADDRESS = "imessage.spectrum.photon.codes:443";
 export const TOKEN_SHARE = 0.8;
-export const MIN_TOKEN_MS = 30000;
+export const MIN_TOKEN_MS = 5000;
 
 export const photonDeps = (): FindMyDeps => ({
   issue: (projectId, projectSecret) => cloud.issueImessageTokens(projectId, projectSecret),
@@ -31,6 +31,8 @@ function target(data: Issued, sharedAddress: string): { address: string; token: 
   return { address: `${instance[0]}.imsg.photon.codes:443`, token: instance[1] };
 }
 
+type Session = { readonly client: AdvancedIMessage; readonly until: number; busy: number; retired: boolean };
+
 export type FindMyOptions = {
   readonly projectId: string;
   readonly projectSecret: string;
@@ -42,29 +44,58 @@ export type FindMyOptions = {
 export function createFindMy(options: FindMyOptions): Locations & { close(): Promise<void> } {
   const { projectId, projectSecret, owner, log } = options;
   const deps = options.deps ?? photonDeps();
-  let session: { client: AdvancedIMessage; until: number } | undefined;
+  let session: Session | undefined;
+  let renewing: Promise<Session> | undefined;
+  let closed = false;
 
-  const client = async (): Promise<AdvancedIMessage> => {
-    const now = deps.now();
-    if (session && now < session.until) return session.client;
+  const release = async (held: Session): Promise<void> => {
+    if (held.retired && held.busy === 0) await held.client.close().catch(() => undefined);
+  };
+
+  const renew = async (): Promise<Session> => {
     const data = await deps.issue(projectId, projectSecret);
+    if (closed) throw new Error("closed");
+    const now = deps.now();
     const { address, token } = target(data, deps.sharedAddress);
-    const previous = session?.client;
-    session = { client: deps.open(address, token), until: now + Math.max(MIN_TOKEN_MS, data.expiresIn * 1000 * TOKEN_SHARE) };
-    await previous?.close().catch(() => undefined);
-    return session.client;
+    const previous = session;
+    session = { client: deps.open(address, token), until: now + Math.max(MIN_TOKEN_MS, data.expiresIn * 1000 * TOKEN_SHARE), busy: 0, retired: false };
+    if (previous) {
+      previous.retired = true;
+      await release(previous);
+    }
+    return session;
+  };
+
+  const lease = async <T>(use: (client: AdvancedIMessage) => Promise<T>): Promise<T> => {
+    if (closed) throw new Error("closed");
+    let held = session;
+    if (!held || deps.now() >= held.until) {
+      renewing ??= renew().finally(() => {
+        renewing = undefined;
+      });
+      held = await renewing;
+    }
+    held.busy += 1;
+    try {
+      return await use(held.client);
+    } finally {
+      held.busy -= 1;
+      await release(held);
+    }
   };
 
   return {
     current: async (): Promise<LiveLocation | undefined> => {
       try {
-        const found = await (await client()).locations.get(owner);
-        if (typeof found.latitude !== "number" || typeof found.longitude !== "number") {
+        const found = await lease((client) => client.locations.get(owner));
+        const now = deps.now();
+        const dated = found.locationTimestamp?.getTime();
+        const usable = typeof found.latitude === "number" && typeof found.longitude === "number" && (dated !== undefined || found.locationType === "live");
+        if (!usable || typeof found.latitude !== "number" || typeof found.longitude !== "number") {
           log("findmy_current", { found: false, type: found.locationType });
           return undefined;
         }
-        const now = deps.now();
-        const at = found.locationTimestamp?.getTime() ?? now;
+        const at = dated ?? now;
         log("findmy_current", { found: true, type: found.locationType, ageSeconds: Math.max(0, Math.round((now - at) / 1000)) });
         return { latitude: found.latitude, longitude: found.longitude, label: cleanLabel(found.shortAddress ?? found.name), at };
       } catch (error) {
@@ -75,8 +106,8 @@ export function createFindMy(options: FindMyOptions): Locations & { close(): Pro
     request: async (space: string): Promise<boolean> => {
       try {
         const [chat] = JSON.parse(space) as [string, string];
-        const receipt = await (await client()).locations.request(chat, owner);
-        log("findmy_request", { status: receipt.status });
+        const receipt = await lease((client) => client.locations.request(chat, owner));
+        log("findmy_request", { status: receipt.status, reason: receipt.reason !== undefined });
         return true;
       } catch (error) {
         log("findmy_failed", { step: "request", error: error instanceof Error ? error.name : "unknown" });
@@ -84,9 +115,13 @@ export function createFindMy(options: FindMyOptions): Locations & { close(): Pro
       }
     },
     close: async () => {
-      const open = session?.client;
+      closed = true;
+      const open = session;
       session = undefined;
-      await open?.close().catch(() => undefined);
+      if (open) {
+        open.retired = true;
+        await release(open);
+      }
     },
   };
 }
