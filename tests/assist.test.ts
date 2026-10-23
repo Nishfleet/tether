@@ -116,7 +116,7 @@ describe("reminders", () => {
 
   it("holds a due reminder while stopped and sends it after RESUME", opts, async () => {
     rig.model.enqueue(call("reminder_set", { text: "later", inMinutes: 0.03 }), say("Set."));
-    await rig.boot({ reminderRecheckMs: 30 });
+    await rig.boot();
     rig.channel.push(inbound("m1", "remind me"));
     await rig.channel.sentCount(1);
     rig.channel.push(inbound("m2", "STOP"));

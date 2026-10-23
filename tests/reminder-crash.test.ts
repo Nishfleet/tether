@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { STOPPED_TEXT } from "../src/app.ts";
 import { REMINDER_PREFIX } from "../src/reminders.ts";
 import { FakeModel, call, inbound, say } from "./helpers.ts";
 import { Tether } from "./process.ts";
@@ -72,5 +73,33 @@ describe("reminders across SIGKILL and restart", () => {
     const third = await start();
     await new Promise((resolve) => setTimeout(resolve, 1200));
     assert.deepEqual(third.sent, [], "a delivered reminder is not sent again");
+  });
+
+  it("keeps two reminders that came due during STOP across a kill and sends each once after RESUME", opts, async () => {
+    const first = await start();
+    model.enqueue(call("reminder_set", { text: "alpha", inMinutes: 0.04 }), say("Set alpha."), call("reminder_set", { text: "beta", inMinutes: 0.04 }), say("Set beta."));
+    first.push(inbound("m1", "remind me alpha"));
+    await first.until(() => first.sent.includes("Set alpha."));
+    first.push(inbound("m2", "remind me beta"));
+    await first.until(() => first.sent.includes("Set beta."));
+    const overdueAt = Date.now() + 0.04 * 60000 + 1500;
+    first.push(inbound("m3", "STOP"));
+    await first.until(() => first.sent.includes(STOPPED_TEXT));
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, overdueAt - Date.now())));
+    assert.deepEqual(first.sent, ["Set alpha.", "Set beta.", STOPPED_TEXT], "nothing sent while stopped");
+    await first.kill9();
+
+    const second = await start();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    assert.deepEqual(second.sent, [], "still held after the restart");
+    second.push(inbound("m4", "RESUME"));
+    await second.until(() => second.sent.length >= 3);
+    assert.deepEqual([...second.sent].sort(), ["Resumed.", `${REMINDER_PREFIX}alpha`, `${REMINDER_PREFIX}beta`].sort());
+    await second.logged("reply_sent", 3);
+    await second.kill9();
+
+    const third = await start();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    assert.deepEqual(third.sent, [], "a released reminder is not sent again");
   });
 });

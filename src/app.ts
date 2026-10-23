@@ -23,7 +23,7 @@ import type { Log } from "./log.ts";
 import { createMemoryExtension } from "./memory.ts";
 import { rememberSpace } from "./owner.ts";
 import type { Fetch } from "./places.ts";
-import { STOPPED_RECHECK_MS } from "./reminders.ts";
+import { releaseHeldReminders } from "./reminders.ts";
 import { createReplyTask, type ReplyInput } from "./reply.ts";
 
 export const INSTRUCTIONS = [
@@ -58,7 +58,6 @@ export type TetherOptions = {
   readonly retryBaseMs?: number;
   readonly timeZone?: string;
   readonly fetch?: Fetch;
-  readonly reminderRecheckMs?: number;
   readonly settings?: HarnessSettings;
   readonly tools?: readonly AnyGuardedTool[];
   readonly approvalTtlMs?: number;
@@ -93,7 +92,6 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
       timeZone: options.timeZone ?? DEFAULT_TIME_ZONE,
       fetch: options.fetch ?? fetch,
       userAgent: USER_AGENT,
-      stoppedRecheckMs: options.reminderRecheckMs ?? STOPPED_RECHECK_MS,
       log,
     }),
   );
@@ -217,6 +215,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
         await queue(tx, reply(item));
       }
       await queue(tx, notice(message.space, RESUMED_TEXT));
+      await releaseHeldReminders(tx, task, root.id);
       return "resumed";
     }, context);
 

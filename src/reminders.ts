@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
-import { defineDoc, defineTask, defineTool, type Task } from "@earendil-works/pi-durable";
+import { defineDoc, defineTask, defineTool, type ConversationId, type Task, type Tx } from "@earendil-works/pi-durable";
 import { humanInZone } from "./clock.ts";
 import { StateDoc } from "./docs.ts";
 import { OwnerDoc } from "./owner.ts";
@@ -11,6 +11,8 @@ export type Reminder = {
   text: string;
   at: number;
   call: string;
+  held?: true;
+  space?: string;
 };
 
 export type Reminders = {
@@ -30,7 +32,6 @@ export type ReminderState = { phase: "wait" };
 export const REMINDER_LIMIT = 100;
 export const REMINDER_CHARS = 500;
 export const MAX_MINUTES = 525600;
-export const STOPPED_RECHECK_MS = 60000;
 export const REMINDER_PREFIX = "Reminder: ";
 
 export const RemindersDoc = defineDoc<Reminders>({
@@ -43,8 +44,8 @@ export const RemindersDoc = defineDoc<Reminders>({
 
 export type ReminderTask = Task<ReminderInput, ReminderState, null, object>;
 
-export function createReminderTask(options: { reply: Task<ReplyInput, ReplyState, null, object>; stoppedRecheckMs: number }): ReminderTask {
-  const { reply, stoppedRecheckMs } = options;
+export function createReminderTask(options: { reply: Task<ReplyInput, ReplyState, null, object> }): ReminderTask {
+  const { reply } = options;
   return defineTask<ReminderInput, ReminderState, null>({
     name: "tether.reminder",
     version: 1,
@@ -61,17 +62,17 @@ export function createReminderTask(options: { reply: Task<ReplyInput, ReplyState
           await runtime.sleepUntil(at, { phase: "wait" }, context);
           return;
         }
-        if ((await runtime.snapshot(StateDoc, context))?.stopped) {
-          await runtime.sleepUntil(runtime.now() + stoppedRecheckMs, { phase: "wait" }, context);
-          return;
-        }
         await runtime.commit(async (tx) => {
           const reminders = await tx.doc(RemindersDoc);
-          const index = reminders.items.findIndex((item) => item.id === id);
-          if (index < 0) return { status: "terminal", outcome: { status: "aborted", reason: "cancelled" } };
-          reminders.items.splice(index, 1);
-          const notice: ReplyInput = { space, inbound: null, prompt: null, notice: `${REMINDER_PREFIX}${body}`, run: 0 };
-          await tx.createTask(reply, notice, { ownership: { kind: "conversation" }, conversationId: runtime.conversationId });
+          const item = reminders.items.find((entry) => entry.id === id);
+          if (!item) return { status: "terminal", outcome: { status: "aborted", reason: "cancelled" } };
+          if ((await tx.doc(StateDoc)).stopped) {
+            item.held = true;
+            item.space = space;
+            return { status: "terminal", outcome: { status: "completed", result: null } };
+          }
+          reminders.items.splice(reminders.items.indexOf(item), 1);
+          await tx.createTask(reply, noticeOf(space, body), { ownership: { kind: "conversation" }, conversationId: runtime.conversationId });
           return { status: "terminal", outcome: { status: "completed", result: null } };
         }, context);
       },
@@ -80,6 +81,20 @@ export function createReminderTask(options: { reply: Task<ReplyInput, ReplyState
       await runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context);
     },
   });
+}
+
+const noticeOf = (space: string, body: string): ReplyInput => ({ space, inbound: null, prompt: null, notice: `${REMINDER_PREFIX}${body}`, run: 0 });
+
+export async function releaseHeldReminders(tx: Tx, reply: Task<ReplyInput, ReplyState, null, object>, conversationId: ConversationId): Promise<number> {
+  const reminders = await tx.doc(RemindersDoc);
+  const owner = await tx.doc(OwnerDoc);
+  const held = reminders.items.filter((item) => item.held);
+  for (const item of held) {
+    const space = item.space ?? owner.space;
+    reminders.items.splice(reminders.items.indexOf(item), 1);
+    if (space) await tx.createTask(reply, noticeOf(space, item.text), { ownership: { kind: "conversation" }, conversationId });
+  }
+  return held.length;
 }
 
 const OFFSET_END = /(Z|[+-]\d{2}:?\d{2})$/i;

@@ -135,8 +135,11 @@ An alarm is a reminder: Tether can only text. It cannot ring the phone, and it
 does not repeat.
 
 **STOP holds reminders.** A reminder that is due while Tether is stopped is not
-sent. Its task re-checks once a minute (a durable sleep again) and the text goes
-out after `RESUME`.
+sent. At the due time the task checks the stopped state in the same commit that
+would send the text. If Tether is stopped, it marks the reminder held and ends,
+with no loop and no timer. The `RESUME` commit sends every held reminder, so a
+reminder is either sent before `STOP` took effect or held for `RESUME`, never
+lost.
 
 **Apple Reminders.** There is no sync with the iPhone Reminders app and none is
 promised. iCloud Reminders that were upgraded to the current format are, as far
@@ -191,7 +194,7 @@ system prompt tells the model to treat it as data.
 | Only a vCard or location file under 64 KB is read | yes, `isLocationAttachment` | `tests/location.test.ts` |
 | The lookup calls one fixed https host, with no redirects | yes, `PLACES_URL`, `redirect: "error"` | `tests/assist.test.ts`, `tests/location.test.ts` |
 | Reminders text only the owner's chat | yes, the space is saved from accepted messages only | `tests/assist.test.ts` |
-| STOP holds due reminders until RESUME | yes, `tether.reminder` checks the state | `tests/assist.test.ts` |
+| STOP holds due reminders until RESUME | yes, `tether.reminder` checks the state in its sending commit and `RESUME` releases them | `tests/assist.test.ts`, `tests/reminder-crash.test.ts` |
 | A reminder survives a kill and is sent once | yes, durable sleep | `tests/reminder-crash.test.ts` |
 | Place names are data, not instructions | instruction only (system prompt); the tool cannot act, only read | none |
 

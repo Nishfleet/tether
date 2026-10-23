@@ -14,12 +14,11 @@ export type AssistOptions = {
   readonly timeZone: string;
   readonly fetch: Fetch;
   readonly userAgent: string;
-  readonly stoppedRecheckMs: number;
   readonly log: Log;
 };
 
 export function createAssistExtension(options: AssistOptions): Extension {
-  const reminder = createReminderTask({ reply: options.reply, stoppedRecheckMs: options.stoppedRecheckMs });
+  const reminder = createReminderTask({ reply: options.reply });
   return defineExtension({
     name: "tether-assist",
     tools: [
