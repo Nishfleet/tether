@@ -95,7 +95,8 @@ describe("reminders across SIGKILL and restart", () => {
     second.push(inbound("m4", "RESUME"));
     await second.until(() => second.sent.length >= 3);
     assert.deepEqual([...second.sent].sort(), ["Resumed.", `${REMINDER_PREFIX}alpha`, `${REMINDER_PREFIX}beta`].sort());
-    assert.ok(second.sent.indexOf(`${REMINDER_PREFIX}beta`) < second.sent.indexOf(`${REMINDER_PREFIX}alpha`), "earliest due first, not first created");
+    const order: string[] = second.sent;
+    assert.ok(order.indexOf(`${REMINDER_PREFIX}beta`) < order.indexOf(`${REMINDER_PREFIX}alpha`), "earliest due first, not first created");
     await second.logged("reply_sent", 3);
     await second.kill9();
 
