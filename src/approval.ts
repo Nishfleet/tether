@@ -12,6 +12,7 @@ import {
   type Tx,
 } from "@earendil-works/pi-durable";
 import type { Log } from "./log.ts";
+import { OwnerDoc } from "./owner.ts";
 
 export type AskFirst<Args = Record<string, unknown>> = true | ((args: Args) => string | undefined);
 
@@ -41,7 +42,6 @@ export type Approval = {
 };
 
 export type ApprovalState = {
-  space: string | null;
   items: Approval[];
 };
 
@@ -61,7 +61,7 @@ export const ApprovalDoc = defineDoc<ApprovalState>({
   kind: "tether.approval",
   version: 1,
   scope: "session",
-  initial: () => ({ space: null, items: [] }),
+  initial: () => ({ items: [] }),
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
 });
 
@@ -89,10 +89,6 @@ async function promote(tx: Tx, notify: Notify): Promise<void> {
       excess -= 1;
     } else index += 1;
   }
-}
-
-export async function rememberSpace(tx: Tx, space: string): Promise<void> {
-  (await tx.doc(ApprovalDoc)).space = space;
 }
 
 export async function hasAsked(tx: Tx): Promise<boolean> {
@@ -197,8 +193,9 @@ export function createApprovalExtension(options: ApprovalOptions): Extension {
             const doc = await tx.doc(ApprovalDoc);
             const found = doc.items.find((item) => item.key === key);
             if (found) return found.status;
-            if (doc.space === null) return "no_chat";
-            doc.items.push({ key, summary: oneLine(summary), space: doc.space, expiresAt, asked: false, status: "pending" });
+            const { space } = await tx.doc(OwnerDoc);
+            if (space === null) return "no_chat";
+            doc.items.push({ key, summary: oneLine(summary), space, expiresAt, asked: false, status: "pending" });
             await promote(tx, notify);
             return "pending";
           }, base);

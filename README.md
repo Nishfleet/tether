@@ -3,9 +3,10 @@
 Owner: **nish3451** (`.github/CODEOWNERS`: `* @nish3451`).
 
 Tether is a personal agent that chats over iMessage and runs on the VPS as a
-system unit. Phase 1 is chat, its own memory notes and crash-proofing, nothing
-else: no shell, no GitHub, Cloudflare or database tokens, no deploys, no web
-access. The spec is `Nishfleet/fleet-ops#9980`. The unit, the service user, the
+system unit. It does chat, its own memory notes, reminders and alarms, location
+over iMessage and nearby places, with crash-proofing under all of it. It has no
+shell, no GitHub, Cloudflare or database tokens, no deploys, and one fixed
+read-only web lookup (nearby places). The spec is `Nishfleet/fleet-ops#9980`. The unit, the service user, the
 firewall rule and the host config are owned by `Nishfleet/fleet-ops` (PR #9986,
 merged); this repo is the app.
 
@@ -35,7 +36,8 @@ without the model. Text `RESUME` to continue.
   sender, every group chat and every non-text message is ignored and logged
   with the message id, the reason and a short salted hash of the sender (random
   salt, created once, 0600 in the state directory), never the content or the
-  handle.
+  handle. The one exception is a sent location from the allowed sender in a
+  direct chat (see Location).
 - **STOP and RESUME.** Decided in code before the model is involved, and only
   for the allowed sender. `STOP` records the stopped state durably, aborts the
   running model calls and queued sends, and replies `Stopped`. While stopped,
@@ -55,8 +57,10 @@ without the model. Text `RESUME` to continue.
   (up to 100, 500 characters each) live in a durable document in the same SQLite
   file and are listed in the system prompt of every request, so they survive
   restarts. The thread itself is the durable conversation in that file.
-- **Tools.** Those two and nothing else. Any future tool that can act for Nish
-  carries `askFirst`; see Safety rules.
+- **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
+  `reminder_list`, `reminder_cancel`, `location_request`, `location_last` and
+  `places_nearby`. Nothing else. Any tool that can act for Nish carries
+  `askFirst`; see Safety rules.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
   model group once the context passes `contextWindow - 16384` tokens
@@ -112,6 +116,84 @@ without the model. Text `RESUME` to continue.
   restart neither repeats nor drops a notice. Replies that fail outright (the
   fixed apology) say nothing about the tier and leave it unchanged.
 
+## Reminders and alarms
+
+`reminder_set` takes a text and either `inMinutes` or `at` (ISO 8601 with a UTC
+offset). `time_now` gives the model today's date in the owner's zone
+(`TETHER_TIMEZONE`, default `Asia/Kolkata`). Each reminder is a Pi Durable task
+(`tether.reminder`) that holds no process while it waits: it commits a durable
+sleep until the due time (`sleepUntil`), so a kill or a restart changes nothing
+and a reminder that came due while the process was dead is texted on the next
+start. There is no timer in the app. At the due time the task creates a normal
+`tether.reply` notice, `Reminder: <text>`, so the text uses the same retrying
+send path as every other message. The pending list is a durable document, and
+`reminder_list` and `reminder_cancel` read and edit it. A cancelled reminder's
+task ends when it wakes, without a text. Up to 100 are pending at once.
+
+An alarm is a reminder: Tether can only text. It cannot ring the phone, and it
+does not repeat.
+
+**STOP holds reminders.** A reminder that is due while Tether is stopped is not
+sent. Its task re-checks once a minute (a durable sleep again) and the text goes
+out after `RESUME`.
+
+**Apple Reminders.** There is no sync with the iPhone Reminders app and none is
+promised. iCloud Reminders that were upgraded to the current format are, as far
+as we can tell, not exposed over CalDAV, which is the only route a server has.
+Reminders live in Tether and arrive as iMessage texts.
+
+## Location
+
+Tether never reads Find My or live sharing. The owner sends a one-off pin in the
+iMessage chat: **+, Location, Send Pin**. `location_request` texts that ask (one
+fixed sentence, sent through the same durable path) and `location_last` reads the
+saved spot back.
+
+A pin arrives as a file attachment, normally a `.loc.vcf` vCard holding a maps
+link with the coordinates. `src/spectrum.ts` lists the message's
+`attachmentMetadata` and reads a file lazily through the provider's
+`getAttachment`, so the vCard is not turned into a contact. Only after the
+sender check (the allowed handle, direct chat) does the app read the file, and
+only for `.vcf` files and vCard or location MIME types under 64 KB. It takes the
+coordinates from a map URL (`ll`, `sll`, `q`, `center`, `daddr`, `saddr`,
+`near`, or an `@lat,lon` path) or a `GEO` line, refuses numbers out of range,
+and saves the last location with a timestamp in the durable `tether.location`
+document. The model is then told `I shared my location: ...` as a normal turn.
+Every other attachment is still ignored. A vCard with no coordinates is logged
+as `attachment_unparsed` with its file name, MIME type and size, never its
+content, and the coordinates themselves are never logged.
+
+The exact vCard of a real iPhone pin is checked live after each change to this
+path. See `tests/location.test.ts` for the shapes the parser accepts.
+
+## Nearby places
+
+`places_nearby` searches around the last shared location, or around a named
+place (`near`, geocoded first). It is a free, read-only lookup with no key and
+no paid places API: Photon (`https://photon.komoot.io/api/`), a search over
+OpenStreetMap data. It is the only web host Tether calls. The URL is a constant
+built in code, the model chooses only the search words, the name of the place
+and the radius (100 m to 5 km), redirects are refused, and a request times out
+after 10 seconds. The result is sorted by distance and each line has an Apple
+Maps link. Photon is a shared demo service for light use, which fits one owner.
+If it ever limits Tether, host Photon ourselves and change the one constant.
+
+Place names come from the open map, so they are untrusted data. The tool only
+reads, so a hostile name cannot make Tether do anything but print it, and the
+system prompt tells the model to treat it as data.
+
+### Safety rules in this part
+
+| Rule | Enforced in code | Proof |
+| --- | --- | --- |
+| A shared location is accepted from the allowed sender in a direct chat only | yes, `classify` | `tests/location.test.ts`, `tests/assist.test.ts` (stranger, file never read) |
+| Only a vCard or location file under 64 KB is read | yes, `isLocationAttachment` | `tests/location.test.ts` |
+| The lookup calls one fixed https host, with no redirects | yes, `PLACES_URL`, `redirect: "error"` | `tests/assist.test.ts`, `tests/location.test.ts` |
+| Reminders text only the owner's chat | yes, the space is saved from accepted messages only | `tests/assist.test.ts` |
+| STOP holds due reminders until RESUME | yes, `tether.reminder` checks the state | `tests/assist.test.ts` |
+| A reminder survives a kill and is sent once | yes, durable sleep | `tests/reminder-crash.test.ts` |
+| Place names are data, not instructions | instruction only (system prompt); the tool cannot act, only read | none |
+
 ## Long replies
 
 The model may write up to 16384 output tokens per answer (`MAX_OUTPUT_TOKENS` in
@@ -152,6 +234,7 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 | `PHOTON_PROJECT_ID` | yes | Photon Spectrum project id |
 | `PHOTON_PROJECT_SECRET` | yes | Photon Spectrum project secret |
 | `TETHER_MODEL_GROUP` | no | router model group the app sends to, default `tether`; the router, not the app, falls back to `assistant`. The primary must be a Claude model: the switch texts and the tier detection assume Claude |
+| `TETHER_TIMEZONE` | no | IANA zone for reminder times, default `Asia/Kolkata` |
 | `TETHER_LLM_BASE_URL` | no | router base URL, default `http://127.0.0.1:4000`; `/v1` is appended unless the path already ends in it |
 | `TETHER_STATE_DIR` | no | state directory; falls back to `STATE_DIRECTORY`, which systemd sets to `/var/lib/tether` |
 
@@ -248,9 +331,11 @@ export const sendText = defineAskFirstTool({
 
 ## Phase 2 rule
 
-Any future web or HTTP tool must refuse loopback, private, link-local and
-tailnet hosts. The model router's port also serves an unauthenticated
-`/metrics`.
+Any web or HTTP tool must refuse loopback, private, link-local and tailnet
+hosts. The model router's port also serves an unauthenticated `/metrics`. The
+places lookup does it by construction: the host is a constant, the model never
+supplies a URL, and the host firewall drops host-local destinations for the
+service user.
 
 ## Rules for changes
 

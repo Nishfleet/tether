@@ -1,4 +1,5 @@
-import { normalizeHandle, type Inbound } from "./channel.ts";
+import { type Inbound, type InboundAttachment, normalizeHandle } from "./channel.ts";
+import { isLocationAttachment } from "./location.ts";
 
 export type Verdict =
   | { readonly kind: "ignore"; readonly reason: "sender_not_allowed" | "not_direct" | "not_text" }
@@ -6,6 +7,7 @@ export type Verdict =
   | { readonly kind: "resume" }
   | { readonly kind: "yes"; readonly text: string }
   | { readonly kind: "no"; readonly text: string }
+  | { readonly kind: "location"; readonly attachment: InboundAttachment }
   | { readonly kind: "chat"; readonly text: string };
 
 export function classify(message: Inbound, allowedSender: string): Verdict {
@@ -14,7 +16,10 @@ export function classify(message: Inbound, allowedSender: string): Verdict {
   }
   if (!message.direct) return { kind: "ignore", reason: "not_direct" };
   const text = message.text?.trim();
-  if (!text) return { kind: "ignore", reason: "not_text" };
+  if (!text) {
+    const attachment = message.attachments?.find(isLocationAttachment);
+    return attachment ? { kind: "location", attachment } : { kind: "ignore", reason: "not_text" };
+  }
   const command = text.toUpperCase();
   if (command === "STOP") return { kind: "stop" };
   if (command === "RESUME") return { kind: "resume" };
