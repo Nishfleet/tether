@@ -154,6 +154,50 @@ describe("location and nearby places", () => {
     assert.deepEqual(rig.texts().sort(), [ASK_TEXT, "I asked you to share it."].sort());
   });
 
+  it("asks with a Find My request card when it can, and falls back to a text when it cannot", opts, async () => {
+    const requested: string[] = [];
+    rig.model.enqueue(call("location_request", {}), say("I sent a request."), call("location_request", {}), say("I asked by text."));
+    rig.channel.locations = {
+      current: async () => undefined,
+      request: async (space) => {
+        requested.push(space);
+        return requested.length === 1;
+      },
+    };
+    await rig.boot();
+    rig.channel.push(inbound("m1", "where am I"));
+    await rig.channel.sentCount(1);
+    assert.deepEqual(rig.texts(), ["I sent a request."]);
+    assert.deepEqual(requested, ["space-1"]);
+    rig.channel.push(inbound("m2", "again"));
+    await rig.channel.sentCount(3);
+    assert.deepEqual(rig.texts().slice(1).sort(), [ASK_TEXT, "I asked by text."].sort());
+  });
+
+  it("uses the Find My location for nearby places and says where it came from", opts, async () => {
+    const seen: Seen[] = [];
+    rig.channel.locations = { current: async () => ({ latitude: 12.9689, longitude: 77.5842, label: "Indiranagar", at: Date.now() - 60_000 }), request: async () => true };
+    rig.model.enqueue(call("places_nearby", { query: "coffee" }), say("Here."));
+    await rig.boot({ fetch: photon([feature("Near Coffee", 12.9692, 77.5843)], seen) });
+    rig.channel.push(inbound("m1", "coffee near me"));
+    await rig.channel.sentCount(1);
+    const result = flatten(rig.model.requests.at(-1) as never);
+    assert.match(result, /Find My location from 1 min ago/);
+    assert.match(result, /Near Coffee/);
+    assert.equal(new URL(seen[0]?.url ?? "").searchParams.get("lat"), "12.9689");
+  });
+
+  it("prefers the newer of a Find My location and a saved pin, and falls back to the pin when Find My has nothing", opts, async () => {
+    rig.channel.locations = { current: async () => ({ latitude: 1, longitude: 2, label: null, at: Date.now() - 3_600_000 }), request: async () => true };
+    rig.model.enqueue(say("Got it."), call("location_last", {}), say("Seen."));
+    await rig.boot();
+    rig.channel.push(pin("m1"));
+    await rig.channel.sentCount(1);
+    rig.channel.push(inbound("m2", "where am I"));
+    await rig.channel.sentCount(2);
+    assert.match(flatten(rig.model.requests.at(-1) as never), /12\.96890, 77\.58420 \(Current Location\) \(shared pin\)/);
+  });
+
   it("saves a location from the allowed sender, tells the model, and reads it back", opts, async () => {
     rig.model.enqueue(say("Got your location."), call("location_last", {}), say("Last seen."));
     await rig.boot();
@@ -162,7 +206,7 @@ describe("location and nearby places", () => {
     assert.match(flatten(rig.model.requests[0] as never), /I shared my location: 12\.96890, 77\.58420 \(Current Location\)/);
     rig.channel.push(inbound("m2", "where was I"));
     await rig.channel.sentCount(2);
-    assert.match(flatten(rig.model.requests.at(-1) as never), /12\.96890, 77\.58420 \(Current Location\), shared \d+ min ago|shared just now/);
+    assert.match(flatten(rig.model.requests.at(-1) as never), /12\.96890, 77\.58420 \(Current Location\) \(shared pin\), (just now|\d+ min ago)/);
   });
 
   it("ignores a location from a stranger and never reads the file", opts, async () => {
@@ -223,7 +267,7 @@ describe("location and nearby places", () => {
     await rig.boot({ fetch: photon([], seen) });
     rig.channel.push(inbound("m1", "coffee near me"));
     await rig.channel.sentCount(1);
-    assert.match(flatten(rig.model.requests[1] as never), /No saved location/);
+    assert.match(flatten(rig.model.requests[1] as never), /No known location/);
     assert.equal(seen.length, 0);
   });
 

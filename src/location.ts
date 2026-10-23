@@ -1,6 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineDoc, defineTool, type Task } from "@earendil-works/pi-durable";
-import type { InboundAttachment } from "./channel.ts";
+import type { InboundAttachment, Locations } from "./channel.ts";
 import { OwnerDoc } from "./owner.ts";
 import type { ReplyInput, ReplyState } from "./reply.ts";
 import { failure, text } from "./tool.ts";
@@ -18,7 +18,7 @@ export type LocationState = {
 };
 
 export const MAX_LOCATION_BYTES = 65536;
-export const ASK_TEXT = "Where are you? In this chat tap +, choose Location, then tap Send Pin.";
+export const ASK_TEXT = "Where are you? Share your location with me from Find My, or tell me an area name.";
 
 export const LocationDoc = defineDoc<LocationState>({
   kind: "tether.location",
@@ -152,35 +152,53 @@ export function locationPrompt(where: Coordinates): string {
   return `I shared my location: ${describeCoordinates(where)}. It is saved as my last location.`;
 }
 
-export function locationTools(options: { reply: Task<ReplyInput, ReplyState, null, object> }) {
-  const { reply } = options;
+export type Located = {
+  readonly coordinates: Coordinates;
+  readonly at: number;
+  readonly source: "find_my" | "pin";
+};
+
+export async function resolveLocation(options: { locations: Locations | undefined; saved: SavedLocation | null }): Promise<Located | undefined> {
+  const live = await options.locations?.current();
+  const found: Located[] = [];
+  if (live) found.push({ coordinates: { latitude: live.latitude, longitude: live.longitude, label: live.label }, at: live.at, source: "find_my" });
+  if (options.saved) found.push({ coordinates: options.saved, at: options.saved.at, source: "pin" });
+  return found.sort((a, b) => b.at - a.at)[0];
+}
+
+export const describeSource = (located: Located) => (located.source === "find_my" ? "Find My" : "shared pin");
+
+export function locationTools(options: { reply: Task<ReplyInput, ReplyState, null, object>; locations: Locations | undefined }) {
+  const { reply, locations } = options;
 
   const request = defineTool({
     name: "location_request",
     description:
-      "Text the owner asking them to share their location in this chat. Use it when you need to know where they are, for example before a nearby-places search with no saved location. The owner sends a pin, and it arrives as a new message. The text is already sent, so do not repeat the steps.",
+      "Ask the owner to share their location. It sends a Find My request card in the chat, and the owner taps Share. Use it when you need to know where they are, for example before a nearby-places search with no known location. The request is already sent, so do not repeat the steps. Their location is readable only after they accept.",
     parameters: Type.Object({}),
     execute: async (_args, api, context) => {
-      const outcome = await api.commit(async (tx) => {
-        const owner = await tx.doc(OwnerDoc);
-        if (owner.space === null) return false;
-        const notice: ReplyInput = { space: owner.space, inbound: null, prompt: null, notice: ASK_TEXT, run: 0 };
+      const space = (await api.snapshot(OwnerDoc, context))?.space;
+      if (!space) return failure("No chat to text yet.");
+      if (locations && (await locations.request(space))) {
+        return text("Sent a Find My request card. Tell the owner to tap Share on it, in one short line.");
+      }
+      await api.commit(async (tx) => {
+        const notice: ReplyInput = { space, inbound: null, prompt: null, notice: ASK_TEXT, run: 0 };
         await tx.createTask(reply, notice, { ownership: { kind: "conversation" }, conversationId: api.conversationId });
-        return true;
       }, context);
-      return outcome ? text("Sent a text asking for the location. Tell the owner you asked, in one short line.") : failure("No chat to text yet.");
+      return text("Sent a text asking for the location. Tell the owner you asked, in one short line.");
     },
   });
 
   const last = defineTool({
     name: "location_last",
-    description: "Read the last location the owner shared, with how long ago it was shared.",
+    description: "Read where the owner is: their Find My location when they are sharing it, otherwise the last pin they sent, with how long ago it was.",
     parameters: Type.Object({}),
     replay: "safe",
     execute: async (_args, api, context) => {
-      const saved = (await api.snapshot(LocationDoc, context))?.latest;
-      if (!saved) return failure("No location saved yet. Use location_request.");
-      return text(`${describeCoordinates(saved)}, shared ${describeAge(api.now(), saved.at)}.`);
+      const located = await resolveLocation({ locations, saved: (await api.snapshot(LocationDoc, context))?.latest ?? null });
+      if (!located) return failure("No location yet. Use location_request.");
+      return text(`${describeCoordinates(located.coordinates)} (${describeSource(located)}), ${describeAge(api.now(), located.at)}.`);
     },
   });
 

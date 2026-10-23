@@ -149,10 +149,31 @@ Reminders live in Tether and arrive as iMessage texts.
 
 ## Location
 
-Tether never reads Find My or live sharing. The owner sends a one-off pin in the
-iMessage chat: **+, Location, Send Pin**. `location_request` texts that ask (one
-fixed sentence, sent through the same durable path) and `location_last` reads the
-saved spot back.
+**Find My, the main route (0.7.1).** A pin sent from the iPhone Location button
+reaches Tether as an iMessage app balloon whose payload Spectrum does not expose
+(proved live on 2026-10-23, see below), so Tether reads the owner's location
+through Photon's own Find My API instead, the `locations` resource of
+`@photon-ai/advanced-imessage` (2.3.0, pinned). Spectrum 12.13.0 and its newest
+release 12.14.0 do not expose it, and Photon's docs name this package as the one
+for features Spectrum lacks, so `src/findmy.ts` is only an adapter: it asks
+Spectrum's public `cloud.issueImessageTokens` for the line's token, opens one
+gRPC client, renews it at 80 percent of its life, and calls `locations.get` for
+the allowed sender's handle and `locations.request` for the request card. The
+owner approved reading his live Find My location on 2026-10-23.
+
+- `location_request` sends a Find My request card in the owner's chat. The owner
+  must tap Share. The request does not grant anything by itself. If the card
+  cannot be sent, Tether texts one fixed sentence instead.
+- `location_last` and `places_nearby` use the newest of the Find My location and
+  the last saved pin, and say which one it was and how old. If the owner is not
+  sharing, Find My answers nothing and the saved pin or the named place is used.
+- Nothing from Find My is stored. The log says `findmy_current` with whether a
+  location was found, its type and age, and never the coordinates.
+- The address passed to Photon is the allowed sender's handle with spaces and
+  punctuation removed (`+` and digits for a phone number).
+
+**Pins and map links, the fallback.** The owner can still send a one-off pin.
+`location_request` no longer asks for it.
 
 A pin arrives as a file attachment, normally a `.loc.vcf` vCard holding a maps
 link with the coordinates. `src/spectrum.ts` lists the message's
@@ -169,7 +190,8 @@ as `attachment_unparsed` with its file name, MIME type and size, never its
 content, and the coordinates themselves are never logged.
 
 **What a real pin looked like (live, 2026-10-23).** The first real "Send Pin" from
-an iPhone did not arrive as a `.loc.vcf` file. Spectrum delivered it as an
+an iPhone did not arrive as a `.loc.vcf` file. Later pins arrived as app balloons
+(the Google Maps iMessage extension and the Find My app) with no readable payload. Spectrum delivered it as an
 `unsupported-message` with no text and no attachment, so v0.5.2 ignored it. From
 0.5.3 the app also reads a map link (`maps.apple.com`, `maps.google.*`,
 `google.*/maps`, `maps.app.goo.gl`) found in the message text, the rich-link URL
@@ -204,6 +226,7 @@ system prompt tells the model to treat it as data.
 | --- | --- | --- |
 | A shared location is accepted from the allowed sender in a direct chat only | yes, `classify` | `tests/location.test.ts`, `tests/assist.test.ts` (stranger, file never read) |
 | Only a vCard or location file under 64 KB is read | yes, `isLocationAttachment` | `tests/location.test.ts` |
+| Find My is read only for the allowed sender's own handle, never stored or logged with coordinates | yes, `createFindMy` takes the one owner address | `tests/findmy.test.ts` |
 | The lookup calls one fixed https host, with no redirects | yes, `PLACES_URL`, `redirect: "error"` | `tests/assist.test.ts`, `tests/location.test.ts` |
 | Reminders text only the owner's chat | yes, the space is saved from accepted messages only | `tests/assist.test.ts` |
 | STOP holds due reminders until RESUME | yes, `tether.reminder` checks the state in its sending commit and `RESUME` releases them | `tests/assist.test.ts`, `tests/reminder-crash.test.ts` |

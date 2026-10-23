@@ -24,9 +24,9 @@ export function createAssistExtension(options: AssistOptions): Extension {
     tools: [
       clockTool(options.timeZone),
       ...reminderTools({ task: reminder, timeZone: options.timeZone }),
-      ...locationTools({ reply: options.reply }),
+      ...locationTools({ reply: options.reply, locations: options.channel.locations }),
       textOwnerTool({ channel: options.channel, log: options.log }),
-      placesTool({ fetch: options.fetch, userAgent: options.userAgent, log: options.log }),
+      placesTool({ fetch: options.fetch, userAgent: options.userAgent, log: options.log, locations: options.channel.locations }),
     ],
     tasks: [reminder],
   });

@@ -14,7 +14,20 @@ export type Inbound = {
   readonly attachments?: readonly InboundAttachment[];
 };
 
+export type LiveLocation = {
+  readonly latitude: number;
+  readonly longitude: number;
+  readonly label: string | null;
+  readonly at: number;
+};
+
+export interface Locations {
+  current(): Promise<LiveLocation | undefined>;
+  request(space: string): Promise<boolean>;
+}
+
 export interface Channel {
+  readonly locations?: Locations;
   messages(): AsyncIterable<Inbound>;
   send(space: string, text: string): Promise<void>;
   stop(): Promise<void>;

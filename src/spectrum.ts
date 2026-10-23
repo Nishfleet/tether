@@ -2,6 +2,7 @@ import { Spectrum } from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
 import type { Channel, Inbound, InboundAttachment } from "./channel.ts";
 import type { PhotonConfig } from "./config.ts";
+import { createFindMy } from "./findmy.ts";
 import { linkAttachment } from "./location.ts";
 import type { Log } from "./log.ts";
 
@@ -11,7 +12,7 @@ type AttachmentInfo = { fileName: string; mimeType: string; guid: string; totalB
 
 const str = (value: unknown): string | undefined => (typeof value === "string" && value !== "" ? value : undefined);
 
-export async function spectrumChannel(photon: PhotonConfig, log: Log): Promise<Channel> {
+export async function spectrumChannel(photon: PhotonConfig, log: Log, owner: string): Promise<Channel> {
   const app = await Spectrum({
     projectId: photon.projectId,
     projectSecret: photon.projectSecret,
@@ -19,6 +20,7 @@ export async function spectrumChannel(photon: PhotonConfig, log: Log): Promise<C
     telemetry: false,
   });
   const provider = imessage(app);
+  const findMy = createFindMy({ projectId: photon.projectId, projectSecret: photon.projectSecret, owner, log });
 
   async function* messages(): AsyncGenerator<Inbound> {
     for await (const [space, message] of app.messages) {
@@ -77,11 +79,15 @@ export async function spectrumChannel(photon: PhotonConfig, log: Log): Promise<C
   }
 
   return {
+    locations: findMy,
     messages,
     send: async (space, text) => {
       const [id, phone] = JSON.parse(space) as SpaceRef;
       await (await provider.space.get(id, { phone })).send(text);
     },
-    stop: () => app.stop(),
+    stop: async () => {
+      await findMy.close();
+      await app.stop();
+    },
   };
 }
