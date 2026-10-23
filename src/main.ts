@@ -4,6 +4,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { startTether, type Tether } from "./app.ts";
 import type { AnyGuardedTool } from "./approval.ts";
 import type { Channel } from "./channel.ts";
+import { type Computer, createComputer } from "./computer.ts";
 import { type Env, loadConfig } from "./config.ts";
 import type { Log } from "./log.ts";
 import { createModelAccess } from "./model.ts";
@@ -15,7 +16,7 @@ export async function run(
   env: Env,
   openChannel: (env: Env, log: Log) => Promise<Channel>,
   log: Log,
-  overrides: { retryBaseMs?: number; tools?: readonly AnyGuardedTool[] } = {},
+  overrides: { retryBaseMs?: number; tools?: readonly AnyGuardedTool[]; computer?: Computer } = {},
 ): Promise<Tether> {
   const config = loadConfig(env);
   mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
@@ -23,7 +24,9 @@ export async function run(
   const storage = await openNodeSqliteStorage(join(config.stateDir, DATABASE_FILE));
   const { models, ref } = createModelAccess({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey, group: config.modelGroup, log });
   const channel = await openChannel(env, log);
-  return startTether({
+  const computer = overrides.computer ?? (config.computer ? createComputer(config.computer, log) : undefined);
+  const tools = [...(computer?.tools ?? []), ...(overrides.tools ?? [])];
+  const tether = await startTether({
     channel,
     models,
     model: ref,
@@ -33,6 +36,8 @@ export async function run(
     log,
     timeZone: config.timeZone,
     ...(overrides.retryBaseMs === undefined ? {} : { retryBaseMs: overrides.retryBaseMs }),
-    ...(overrides.tools === undefined ? {} : { tools: overrides.tools }),
+    ...(tools.length === 0 ? {} : { tools }),
   });
+  void computer?.startup();
+  return tether;
 }
