@@ -195,7 +195,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
       if (!(await hasAsked(tx))) return "none";
       const state = await tx.doc(StateDoc);
       if (!claim(state, message.id)) return "duplicate";
-      return answer(tx, approve, notify);
+      return answer(tx, approve, notify, Date.now());
     }, context);
 
   const onResume = (message: Inbound) =>

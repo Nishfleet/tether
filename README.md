@@ -393,6 +393,8 @@ export const sendText = defineAskFirstTool({
 - Any extension installed in the registry is covered. The hook finds the tool by name, so nothing else needs wiring.
 - Tether texts one line: `Allow this? <summary> Reply YES to allow or NO to cancel. No answer within 24 hours cancels it.` Only one question is open at a time. YES or NO answers the open one.
 - Only the exact text YES from the allowed sender runs the tool. NO, 24 hours of silence and STOP cancel it, and the model gets a blocked result.
+- A YES that arrives after the 24 hours are over cancels the approval and is not read as consent, even if no tool was waiting at that moment.
+- Known limit: a second YES that Nish typed before he saw the next question can answer that next question, because a reply carries no code. Questions are asked one at a time, so the owner sees each summary before the next one is open.
 - A restart keeps the pending approval. The approval is filed once per tool call, so a restart never files it twice. If a kill lands between handing the question to iMessage and recording that it was sent, the question text can go out a second time.
 
 ## Phase 2 rule

@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { APPROVAL_TTL_MS, askText, BLOCKS, MONEY_BLOCK } from "../src/approval.ts";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { createModels } from "@earendil-works/pi-ai";
+import { createRegistry, Harness, type Tx } from "@earendil-works/pi-durable";
+import { answer, APPROVAL_TTL_MS, ApprovalDoc, askText, BLOCKS, describeCall, MONEY_BLOCK, SUMMARY_CHARS } from "../src/approval.ts";
 import { startTether, type Tether } from "../src/app.ts";
 import { classify } from "../src/control.ts";
 import { createModelAccess } from "../src/model.ts";
@@ -171,5 +174,32 @@ describe("ask-first approval, in process", () => {
     assert.deepEqual(ran, []);
     assert.equal(channel.sent[0]?.text, "I cannot pay.");
     assert.match(flatten(model.requests[1] as never), new RegExp(MONEY_BLOCK.slice(0, 30)));
+  });
+});
+
+describe("approval rules without a running tool", () => {
+  it("refuses a YES that arrives after the approval expired, and moves on to the next question", opts, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "tether-ask-expiry-"));
+    const harness = await Harness.open(await openNodeSqliteStorage(join(dir, "t.sqlite")), { models: createModels(), registry: createRegistry() }, BACKGROUND_CONTEXT);
+    const sent: string[] = [];
+    const notify = async (_tx: Tx, _space: string, text: string) => void sent.push(text);
+    const item = (key: string, expiresAt: number) => ({ key, summary: `Do ${key}.`, space: SPACE, expiresAt, asked: false, status: "pending" as const });
+    await harness.commit(async (tx) => {
+      const doc = await tx.doc(ApprovalDoc);
+      doc.items.push({ ...item("a", 1000), asked: true }, item("b", 5000));
+    }, BACKGROUND_CONTEXT);
+    const outcome = await harness.commit((tx) => answer(tx, true, notify, 2000), BACKGROUND_CONTEXT);
+    const state = await harness.snapshot(ApprovalDoc, BACKGROUND_CONTEXT);
+    await harness.close(BACKGROUND_CONTEXT);
+    rmSync(dir, { recursive: true, force: true });
+    assert.equal(outcome, "expired");
+    assert.deepEqual(state?.items.map((entry) => entry.status), ["expired", "pending"]);
+    assert.deepEqual(sent, [askText("Do b.")]);
+  });
+
+  it("marks a cut summary so the owner can see it was shortened", () => {
+    const summary = describeCall({ name: "send_text", arguments: { to: "x".repeat(400) } });
+    assert.equal(summary.length, SUMMARY_CHARS);
+    assert.ok(summary.endsWith("…"));
   });
 });

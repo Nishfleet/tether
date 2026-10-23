@@ -69,7 +69,10 @@ export const askText = (summary: string) => `Allow this? ${summary} Reply YES to
 
 export type Notify = (tx: Tx, space: string, text: string) => Promise<void>;
 
-const oneLine = (value: string) => value.replace(/\s+/g, " ").trim().slice(0, SUMMARY_CHARS);
+const oneLine = (value: string) => {
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat.length > SUMMARY_CHARS ? `${flat.slice(0, SUMMARY_CHARS - 1)}…` : flat;
+};
 
 export function describeCall(call: Pick<ToolHookCall, "name" | "arguments">): string {
   return oneLine(`Run ${call.name} with ${JSON.stringify(call.arguments)}.`);
@@ -96,11 +99,11 @@ export async function hasAsked(tx: Tx): Promise<boolean> {
   return doc.items.some((item) => item.status === "pending" && item.asked);
 }
 
-export async function answer(tx: Tx, approve: boolean, notify: Notify): Promise<"approved" | "denied" | "none"> {
+export async function answer(tx: Tx, approve: boolean, notify: Notify, at: number): Promise<"approved" | "denied" | "expired" | "none"> {
   const doc = await tx.doc(ApprovalDoc);
   const head = doc.items.find((item) => item.status === "pending" && item.asked);
   if (!head) return "none";
-  head.status = approve ? "approved" : "denied";
+  head.status = head.expiresAt <= at ? "expired" : approve ? "approved" : "denied";
   await promote(tx, notify);
   return head.status;
 }
