@@ -19,6 +19,7 @@ export type GoogleEndpoints = {
 
 const MAX_EVENTS = 250;
 const MAX_CALENDARS = 50;
+const MAX_PAGES = 4;
 const MAX_CONTACTS = 30;
 const PERSON_FIELDS = "names,phoneNumbers,emailAddresses";
 
@@ -54,24 +55,41 @@ export function googleBackends(config: GoogleConfig, timezone: string, endpoints
     };
   };
 
+  const calendarIds = async (): Promise<string[]> => {
+    const ids: string[] = [];
+    let pageToken: string | undefined;
+    for (let pages = 0; pages < MAX_PAGES; pages += 1) {
+      const listed = await events.calendarList.list({ maxResults: MAX_CALENDARS, minAccessRole: "reader", ...(pageToken ? { pageToken } : {}) });
+      for (const entry of listed.data.items ?? []) if (entry.id && entry.selected !== false) ids.push(entry.id);
+      pageToken = listed.data.nextPageToken ?? undefined;
+      if (!pageToken) break;
+    }
+    return ids.length > 0 ? ids : ["primary"];
+  };
+
   const calendars: CalendarBackend = {
     source: "google",
     list: async (from, to) => {
-      const listed = await events.calendarList.list({ maxResults: MAX_CALENDARS, minAccessRole: "reader" });
-      const ids = (listed.data.items ?? []).filter((entry) => entry.selected !== false).map((entry) => entry.id).filter((id): id is string => Boolean(id));
+      const ids = await calendarIds();
       const found: CalendarEvent[] = [];
-      for (const calendarId of ids.length > 0 ? ids : ["primary"]) {
-        const page = await events.events.list({
-          calendarId,
-          timeMin: from.toISOString(),
-          timeMax: to.toISOString(),
-          singleEvents: true,
-          orderBy: "startTime",
-          maxResults: MAX_EVENTS,
-        });
-        for (const item of page.data.items ?? []) {
-          const mapped = toEvent(item);
-          if (mapped) found.push(mapped);
+      for (const calendarId of ids) {
+        let pageToken: string | undefined;
+        for (let pages = 0; pages < MAX_PAGES; pages += 1) {
+          const page = await events.events.list({
+            calendarId,
+            timeMin: from.toISOString(),
+            timeMax: to.toISOString(),
+            singleEvents: true,
+            orderBy: "startTime",
+            maxResults: MAX_EVENTS,
+            ...(pageToken ? { pageToken } : {}),
+          });
+          for (const item of page.data.items ?? []) {
+            const mapped = toEvent(item);
+            if (mapped) found.push(mapped);
+          }
+          pageToken = page.data.nextPageToken ?? undefined;
+          if (!pageToken) break;
         }
       }
       return found;

@@ -14,6 +14,7 @@ export class FakeGoogle {
   readonly badAuth: string[] = [];
   calendars: unknown[] = [{ id: "primary", selected: true }, { id: "family", selected: true }, { id: "hidden", selected: false }];
   eventsByCalendar: Record<string, unknown[]> = {};
+  eventPages: Record<string, unknown[][]> = {};
   contacts: unknown[] = [];
   grantedScopes: string[] = [];
   private server: Server | undefined;
@@ -54,6 +55,12 @@ export class FakeGoogle {
       return;
     }
     const listed = /^\/calendar\/v3\/calendars\/([^/]+)\/events$/.exec(url.pathname);
+    if (listed && req.method === "GET" && this.eventPages[decodeURIComponent(listed[1] as string)]) {
+      const pages = this.eventPages[decodeURIComponent(listed[1] as string)] as unknown[][];
+      const index = Number(url.searchParams.get("pageToken") ?? 0);
+      json({ items: pages[index] ?? [], ...(index + 1 < pages.length ? { nextPageToken: String(index + 1) } : {}) });
+      return;
+    }
     if (listed && req.method === "GET") {
       json({ items: this.eventsByCalendar[decodeURIComponent(listed[1] as string)] ?? [] });
       return;

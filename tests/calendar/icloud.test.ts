@@ -43,6 +43,38 @@ describe("icloud backends against a fake DAV server", () => {
     assert.deepEqual(dav.badAuth, []);
   });
 
+  it("reads a floating time in the configured timezone, not the host's", async () => {
+    dav.calendarObjects.push({ name: "f.ics", data: ical("BEGIN:VEVENT\r\nUID:f\r\nDTSTAMP:20261020T000000Z\r\nDTSTART:20261024T130000\r\nDTEND:20261024T140000\r\nSUMMARY:Floating\r\nEND:VEVENT") });
+    const [event] = await open().calendar[0]!.list(new Date("2026-10-23T18:30:00Z"), new Date("2026-10-24T18:30:00Z"));
+    assert.equal(event?.start.toISOString(), "2026-10-24T07:30:00.000Z");
+    assert.equal(event?.end.toISOString(), "2026-10-24T08:30:00.000Z");
+  });
+
+  it("shows each expanded occurrence of a repeating event", async () => {
+    const occurrence = (day: string) =>
+      `BEGIN:VEVENT\r\nUID:r\r\nRECURRENCE-ID:${day}T043000Z\r\nDTSTAMP:20261020T000000Z\r\nDTSTART:${day}T043000Z\r\nDTEND:${day}T050000Z\r\nSUMMARY:Gym\r\nEND:VEVENT`;
+    dav.calendarObjects.push({ name: "r.ics", data: ical(`${occurrence("20261024")}\r\n${occurrence("20261025")}`) });
+    const events = await open().calendar[0]!.list(new Date("2026-10-23T18:30:00Z"), new Date("2026-10-26T18:30:00Z"));
+    assert.deepEqual(events.map((entry) => entry.start.toISOString()), ["2026-10-24T04:30:00.000Z", "2026-10-25T04:30:00.000Z"]);
+  });
+
+  it("keeps an event with no end time that starts exactly at the window start", async () => {
+    dav.calendarObjects.push({ name: "z.ics", data: ical("BEGIN:VEVENT\r\nUID:z\r\nDTSTAMP:20261020T000000Z\r\nDTSTART:20261023T183000Z\r\nSUMMARY:Ping\r\nEND:VEVENT") });
+    const events = await open().calendar[0]!.list(new Date("2026-10-23T18:30:00Z"), new Date("2026-10-24T18:30:00Z"));
+    assert.deepEqual(events.map((entry) => entry.title), ["Ping"]);
+  });
+
+  it("skips one broken object instead of losing the whole account", async () => {
+    dav.calendarObjects.push(
+      { name: "bad.ics", data: "this is not a calendar" },
+      { name: "ok.ics", data: ical("BEGIN:VEVENT\r\nUID:o\r\nDTSTAMP:20261020T000000Z\r\nDTSTART:20261024T073000Z\r\nDTEND:20261024T083000Z\r\nSUMMARY:Fine\r\nEND:VEVENT") },
+    );
+    dav.cards.push({ name: "bad.vcf", data: "garbage" }, { name: "ok.vcf", data: "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Asha Rao\r\nN:Rao;Asha;;;\r\nEND:VCARD\r\n" });
+    const backends = open();
+    assert.deepEqual((await backends.calendar[0]!.list(new Date("2026-10-23T18:30:00Z"), new Date("2026-10-24T18:30:00Z"))).map((entry) => entry.title), ["Fine"]);
+    assert.deepEqual((await backends.contacts[0]!.find("asha")).map((person) => person.name), ["Asha Rao"]);
+  });
+
   it("skips calendars that hold no events, such as reminders", async () => {
     await open().calendar[0]!.list(new Date("2026-10-23T18:30:00Z"), new Date("2026-10-24T18:30:00Z"));
     assert.deepEqual(dav.requests.filter((line) => line.startsWith("REPORT")), ["REPORT /calendars/home/"]);
@@ -91,6 +123,7 @@ describe("icloud backends against a fake DAV server", () => {
     await backend.add({ name: "Ravi Kumar", phone: "+91 90000 11111", email: undefined });
     assert.equal(dav.cards.length, 2);
     assert.match(dav.cards[1]!.data, /FN:Ravi Kumar/);
+    assert.match(dav.cards[1]!.data, /\r\nN:Kumar;Ravi;;;\r\n/);
     assert.match(dav.cards[1]!.data, /TEL:\+91 90000 11111/);
   });
 

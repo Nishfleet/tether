@@ -45,8 +45,8 @@ function eventsOf(data: string, zone: string): CalendarEvent[] {
     const start = event.startDate;
     if (!start) return [];
     const allDay = start.isDate;
-    const first = start.toJSDate();
-    const last = event.endDate ? event.endDate.toJSDate() : new Date(first.getTime() + (allDay ? 86_400_000 : 0));
+    const first = instant(start, zone);
+    const last = event.endDate ? instant(event.endDate, zone) : new Date(first.getTime() + (allDay ? 86_400_000 : 0));
     return [
       {
         sources: ["icloud" as const],
@@ -61,9 +61,24 @@ function eventsOf(data: string, zone: string): CalendarEvent[] {
   });
 }
 
+function instant(time: ICAL.Time, zone: string): Date {
+  if (time.zone?.tzid !== "floating") return time.toJSDate();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const text = `${time.year}-${pad(time.month)}-${pad(time.day)}T${pad(time.hour)}:${pad(time.minute)}:${pad(time.second)}`;
+  return parseWhen(text, zone)?.date ?? new Date(Number.NaN);
+}
+
 function localMidnight(time: ICAL.Time, zone: string, plusDays = 0): Date {
   const day = new Date(Date.UTC(time.year, time.month - 1, time.day + plusDays)).toISOString().slice(0, 10);
   return parseWhen(day, zone)?.date ?? new Date(Number.NaN);
+}
+
+function readable<T>(read: () => T[]): T[] {
+  try {
+    return read();
+  } catch {
+    return [];
+  }
 }
 
 function calendarObject(event: NewEvent, zone: string, owner: string): string {
@@ -110,7 +125,8 @@ function cardObject(person: NewPerson): string {
   card.addPropertyWithValue("prodid", "-//Tether//Contacts//EN");
   card.addPropertyWithValue("uid", randomUUID());
   card.addPropertyWithValue("fn", person.name);
-  card.addPropertyWithValue("n", [person.name, "", "", "", ""]);
+  const cut = person.name.lastIndexOf(" ");
+  card.addPropertyWithValue("n", cut > 0 ? [person.name.slice(cut + 1), person.name.slice(0, cut), "", "", ""] : ["", person.name, "", "", ""]);
   if (person.phone) card.addPropertyWithValue("tel", person.phone);
   if (person.email) card.addPropertyWithValue("email", person.email);
   return card.toString();
@@ -141,8 +157,9 @@ export function icloudBackends(config: IcloudConfig, timezone: string, endpoints
         const objects = await client.fetchCalendarObjects({ calendar, timeRange: { start: from.toISOString(), end: to.toISOString() }, expand: true });
         for (const object of objects) {
           if (typeof object.data !== "string") continue;
-          for (const event of eventsOf(object.data, timezone)) {
-            if (event.end > from && event.start < to) found.push(event);
+          for (const event of readable(() => eventsOf(object.data as string, timezone))) {
+            const empty = event.end.getTime() === event.start.getTime();
+            if (event.start < to && (empty ? event.start >= from : event.end > from)) found.push(event);
           }
         }
       }
@@ -170,7 +187,10 @@ export function icloudBackends(config: IcloudConfig, timezone: string, endpoints
       for (const addressBook of books) {
         for (const card of await client.fetchVCards({ addressBook })) {
           if (typeof card.data !== "string") continue;
-          const person = peopleOf(card.data);
+          const [person] = readable(() => {
+            const parsed = peopleOf(card.data as string);
+            return parsed ? [parsed] : [];
+          });
           if (!person) continue;
           const haystack = [person.name, ...person.phones, ...person.emails].join("\n").toLowerCase();
           if (haystack.includes(needle)) found.push(person);

@@ -162,6 +162,7 @@ describe("calendar and contacts tools", () => {
     const google = new FakeCalendar("google");
     const { run } = setup({ calendar: [google], contacts: [] });
     assert.equal((await run("calendar_create", { title: "A", start: "2026-11-01", end: "2026-11-02T10:00" })).isError, true);
+    assert.equal((await run("calendar_create", { title: "A", start: "2026-11-01T10:00", end: "2026-11-02" })).isError, true);
     assert.equal((await run("calendar_create", { title: "A", start: "2026-11-01T10:00", end: "2026-11-01T09:00" })).isError, true);
     assert.equal((await run("calendar_create", { title: "A", start: "soon" })).isError, true);
     assert.equal((await run("calendar_create", { title: "A", start: "2026-11-01", calendar: "icloud" })).isError, true);
@@ -198,6 +199,14 @@ describe("calendar and contacts tools", () => {
     assert.match(result.text, /untrusted_contact_data/);
     icloud.failure = new Error("down");
     assert.match((await run("contacts_find", { query: "asha" })).text, /icloud contacts could not be read/);
+  });
+
+  it("says how many matches were left out", async () => {
+    const many = Array.from({ length: 23 }, (_, index) => ({ sources: ["google" as const], name: `Asha ${String(index).padStart(2, "0")}`, phones: [], emails: [] }));
+    const { run } = setup({ calendar: [], contacts: [new FakeContacts("google", many)] });
+    const result = await run("contacts_find", { query: "asha" });
+    assert.equal(result.text.split("\n").filter((line) => line.startsWith("[")).length, 20);
+    assert.match(result.text, /3 more matches not shown/);
   });
 
   it("adds a contact only with a phone or a plain email", async () => {

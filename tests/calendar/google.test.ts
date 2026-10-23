@@ -56,6 +56,14 @@ describe("google backends against a fake API", () => {
     assert.equal(first?.query.get("timeMin"), "2026-10-23T18:30:00.000Z");
   });
 
+  it("follows next-page tokens so a busy calendar is not cut short", async () => {
+    google.calendars = [{ id: "primary", selected: true }];
+    const item = (title: string) => ({ summary: title, start: { dateTime: "2026-10-24T13:00:00+05:30" }, end: { dateTime: "2026-10-24T14:00:00+05:30" } });
+    google.eventPages = { primary: [[item("one")], [item("two")], [item("three")]] };
+    const events = await open().calendar[0]!.list(new Date("2026-10-23T18:30:00Z"), new Date("2026-10-24T18:30:00Z"));
+    assert.deepEqual(events.map((entry) => entry.title), ["one", "two", "three"]);
+  });
+
   it("creates an event with no invitations when nobody is invited", async () => {
     await open().calendar[0]!.create({ title: "Lunch", start: new Date("2026-10-30T07:30:00Z"), end: new Date("2026-10-30T08:30:00Z"), allDay: false, location: "Cafe", attendees: [] });
     const posted = google.seen.find((entry) => entry.method === "POST");

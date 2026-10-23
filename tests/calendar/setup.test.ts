@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -33,6 +33,19 @@ describe("setup", () => {
     updateEnvFile(file, { TETHER_ICLOUD_APPLE_ID: "new", ADDED: "x" }, undefined);
     assert.deepEqual([...parseEnv(readFileSync(file, "utf8"))], [["KEEP", "1"], ["TETHER_ICLOUD_APPLE_ID", "new"], ["ADDED", "x"]]);
     assert.equal(statSync(file).mode & 0o777, 0o640);
+  });
+
+  it("keeps comments and unknown lines, replaces a repeated name once and leaves no staged file behind", () => {
+    writeFileSync(file, "# note\nexport KEEP=1\nTETHER_ICLOUD_APPLE_ID=old\nTETHER_ICLOUD_APPLE_ID=older\nlower=x\n", { mode: 0o600 });
+    updateEnvFile(file, { TETHER_ICLOUD_APPLE_ID: "new" }, undefined);
+    assert.equal(readFileSync(file, "utf8"), "# note\nexport KEEP=1\nTETHER_ICLOUD_APPLE_ID=new\nlower=x\n");
+    assert.deepEqual(readdirSync(dir), ["calendar.env"]);
+  });
+
+  it("removes the staged file when the final step fails", () => {
+    mkdirSync(file);
+    assert.throws(() => updateEnvFile(file, { NAME: "x" }, undefined));
+    assert.deepEqual(readdirSync(dir), ["calendar.env"]);
   });
 
   it("refuses a value that would break the file", () => {

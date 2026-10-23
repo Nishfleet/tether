@@ -12,6 +12,7 @@ export type CalendarOptions = {
 
 const EMAIL = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;
 const MAX_LINES = 60;
+const MAX_PEOPLE = 20;
 
 const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
 const failure = (value: string) => ({ ...text(value), isError: true });
@@ -99,7 +100,7 @@ export function createCalendarExtension(options: CalendarOptions): Extension {
     const end = args.end === undefined ? undefined : parseWhen(args.end, timezone);
     if (args.end !== undefined && !end) return "The end must look like 2026-10-24 or 2026-10-24T14:00 or carry a UTC offset.";
     const allDay = start.dateOnly;
-    if (allDay && end && !end.dateOnly) return "Give the start and the end in the same form: both dates or both times.";
+    if (end && end.dateOnly !== allDay) return "Give the start and the end in the same form: both dates or both times.";
     const first = start.date;
     const last = allDay ? addDays(end ? end.date : first, timezone, 1) : (end?.date ?? new Date(first.getTime() + 3_600_000));
     if (last <= first) return "The end must be after the start.";
@@ -168,8 +169,10 @@ export function createCalendarExtension(options: CalendarOptions): Extension {
         const known = merged.get(key);
         merged.set(key, known ? { ...known, sources: [...new Set([...known.sources, ...person.sources])] } : person);
       }
-      const lines = [...merged.values()].slice(0, 20).map(peopleLine);
-      const body = lines.length > 0 ? wrap("contact_data", lines) : "No matching contacts.";
+      const all = [...merged.values()];
+      const lines = all.slice(0, MAX_PEOPLE).map(peopleLine);
+      const more = all.length > MAX_PEOPLE ? [`${all.length - MAX_PEOPLE} more matches not shown. Ask with a longer name.`] : [];
+      const body = lines.length > 0 ? wrap("contact_data", [...lines, ...more]) : "No matching contacts.";
       return text([body, ...notes].join("\n"));
     },
   });

@@ -1,4 +1,4 @@
-import { chmodSync, chownSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const DEFAULT_ENV_FILE = "/etc/tether/calendar.env";
@@ -13,8 +13,18 @@ export function parseEnv(content: string): Map<string, string> {
   return entries;
 }
 
-export function renderEnv(entries: ReadonlyMap<string, string>): string {
-  return `${[...entries].map(([name, value]) => `${name}=${value}`).join("\n")}\n`;
+export function mergeEnv(content: string, updates: Readonly<Record<string, string>>): string {
+  const lines = content.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  const pending = new Map(Object.entries(updates));
+  const kept = lines.flatMap((line) => {
+    const name = /^([A-Z][A-Z0-9_]*)=/.exec(line)?.[1];
+    if (name === undefined || !(name in updates)) return [line];
+    const value = pending.get(name);
+    pending.delete(name);
+    return value === undefined ? [] : [`${name}=${value}`];
+  });
+  return `${[...kept, ...[...pending].map(([name, value]) => `${name}=${value}`)].join("\n")}\n`;
 }
 
 export function groupId(name: string, groupFile = "/etc/group"): number | undefined {
@@ -30,12 +40,15 @@ export function updateEnvFile(path: string, updates: Readonly<Record<string, str
   for (const [name, value] of Object.entries(updates)) {
     if (!/^[A-Z][A-Z0-9_]*$/.test(name) || /[\r\n]/.test(value) || value.length === 0) throw new Error(`refusing to write ${name}`);
   }
-  const existing = existsSync(path) ? parseEnv(readFileSync(path, "utf8")) : new Map<string, string>();
-  const merged = new Map([...existing, ...Object.entries(updates)]);
+  const content = existsSync(path) ? readFileSync(path, "utf8") : "";
   const staged = join(dirname(path), `.${process.pid}.calendar.env.tmp`);
-  writeFileSync(staged, renderEnv(merged), { mode: 0o600 });
-  const owner = existsSync(path) ? statSync(path) : undefined;
-  if (process.getuid?.() === 0) chownSync(staged, owner?.uid ?? 0, owner?.gid ?? group ?? 0);
-  chmodSync(staged, 0o640);
-  renameSync(staged, path);
+  try {
+    writeFileSync(staged, mergeEnv(content, updates), { mode: 0o600 });
+    const owner = existsSync(path) ? statSync(path) : undefined;
+    if (process.getuid?.() === 0) chownSync(staged, owner?.uid ?? 0, owner?.gid ?? group ?? 0);
+    chmodSync(staged, 0o640);
+    renameSync(staged, path);
+  } finally {
+    rmSync(staged, { force: true });
+  }
 }
