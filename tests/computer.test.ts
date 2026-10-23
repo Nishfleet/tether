@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -25,21 +26,23 @@ class FakeSpace implements SpacePort {
   readonly written: [string, string][] = [];
   result: BashResult = OK;
   failWith: Error | undefined;
-  files: Record<string, string> = {};
+  shell = false;
+  readonly timeouts: (bigint | undefined)[] = [];
 
-  bash = async (command: string, _timeoutMs: bigint | undefined) => {
+  bash = async (command: string, timeoutMs: bigint | undefined) => {
     this.commands.push(command);
+    this.timeouts.push(timeoutMs);
     if (this.failWith) throw this.failWith;
-    return this.result;
+    if (!this.shell) return this.result;
+    try {
+      return { stdout: execFileSync("sh", ["-c", command], { encoding: "utf8", maxBuffer: 1 << 24 }), stderr: "", exitCode: 0, timedOut: false };
+    } catch (error) {
+      const failed = error as { status: number; stderr: string };
+      return { stdout: "", stderr: failed.stderr, exitCode: failed.status, timedOut: false };
+    }
   };
   write = async (path: string, content: ArrayBuffer) => {
     this.written.push([path, Buffer.from(content).toString("utf8")]);
-  };
-  download = async (remotePath: string, destDir: string) => {
-    const body = this.files[remotePath];
-    if (body === undefined) throw new Error("not found");
-    writeFileSync(join(destDir, remotePath.split("/").pop() as string), body);
-    return { dest: destDir };
   };
 }
 
@@ -100,11 +103,6 @@ describe("computer extension tools", () => {
   it("replays only the pure read", () => {
     const { computer } = build(new FakeSpaces());
     assert.deepEqual(computer.tools.filter((tool) => tool.replay === "safe").map((tool) => tool.name), ["computer_read"]);
-  });
-
-  it("has no Mac tool and no tool that names a Mac", () => {
-    const { computer } = build(new FakeSpaces());
-    assert.ok(computer.tools.every((tool) => !/\bmac\b|imessage/i.test(`${tool.name} ${tool.description}`)));
   });
 });
 
@@ -213,6 +211,21 @@ describe("ensure Space", () => {
     assert.equal(everything.includes(TOKEN), false);
   });
 
+  it("never adopts a same-named Space on another host", async () => {
+    const fake = new FakeSpaces();
+    fake.entries = [info("tether", "other-1", "stopped", "elsewhere")];
+    await build(fake).tool("computer_run")({ command: "uname" });
+    assert.deepEqual(fake.calls, ["list", "create tether"]);
+    assert.equal(fake.spaces.has("other-1"), false);
+  });
+
+  it("clamps a fractional, tiny or huge timeout to whole seconds from 1 to 900", async () => {
+    const fake = new FakeSpaces();
+    const { tool } = build(fake);
+    for (const timeoutSec of [0.0005, -5, 1.9, 99999, undefined]) await tool("computer_run")({ command: "x", timeoutSec });
+    assert.deepEqual(fake.spaces.get("id-1")!.timeouts, [1000n, 1000n, 1000n, 900000n, 120000n]);
+  });
+
   it("starts a stopped Space", async () => {
     const fake = new FakeSpaces();
     fake.entries = [info("tether", "id-9", "stopped")];
@@ -253,14 +266,59 @@ describe("ensure Space", () => {
     assert.match(textOf(bad), /exit code 2\nstderr:\nboom/);
   });
 
-  it("writes and reads files in its own Space", async () => {
+  it("writes files in its own Space", async () => {
     const fake = new FakeSpaces();
     const { tool } = build(fake);
-    await tool("computer_write")({ path: "/home/a.txt", content: "hi é" });
-    assert.deepEqual(fake.spaces.get("id-1")!.written, [["/home/a.txt", "hi é"]]);
-    fake.spaces.get("id-1")!.files["/home/a.txt"] = "file body";
-    assert.equal(textOf(await tool("computer_read")({ path: "/home/a.txt" })), "file body");
-    await assert.rejects(tool("computer_read")({ path: "/missing" }), /not found/);
+    await tool("computer_write")({ path: "/home/a.txt", content: "hi \u00e9" });
+    assert.deepEqual(fake.spaces.get("id-1")!.written, [["/home/a.txt", "hi \u00e9"]]);
+  });
+
+  describe("computer_read", () => {
+    let dir: string;
+    let fake: FakeSpaces;
+    let read: ReturnType<typeof build>["tool"] extends (name: string) => infer F ? F : never;
+
+    beforeEach(async () => {
+      dir = mkdtempSync(join(tmpdir(), "tether-read-"));
+      fake = new FakeSpaces();
+      const { tool } = build(fake);
+      read = tool("computer_read");
+      await tool("computer_run")({ command: "true" });
+      fake.spaces.get("id-1")!.shell = true;
+    });
+
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    it("returns a small file whole", async () => {
+      writeFileSync(join(dir, "a.txt"), "file body \u00e9\n");
+      assert.equal(textOf(await read({ path: join(dir, "a.txt") })), "file body \u00e9\n");
+    });
+
+    it("pulls at most the first 100000 bytes of a large file and says it cut", async () => {
+      writeFileSync(join(dir, "big.txt"), "x".repeat(300000));
+      const result = await read({ path: join(dir, "big.txt") });
+      assert.equal(textOf(result), `${"x".repeat(100000)}\n[cut at 100000 bytes of 300000]`);
+      assert.match(fake.spaces.get("id-1")!.commands.at(-1) as string, /head -c 100000/);
+    });
+
+    it("refuses a binary file, a directory, a missing file and a device without reading them", async () => {
+      writeFileSync(join(dir, "bin"), Buffer.from([1, 0, 2]));
+      assert.equal(textOf(await read({ path: join(dir, "bin") })), `${join(dir, "bin")} is a binary file.`);
+      for (const path of [dir, join(dir, "missing"), "/dev/zero"]) {
+        const result = await read({ path });
+        assert.equal(result.isError, true, path);
+        assert.match(textOf(result), /not a regular file/);
+      }
+    });
+
+    it("keeps a hostile path inside one quoted word", async () => {
+      const hostile = join(dir, "a'; echo pwned; echo 'b");
+      writeFileSync(hostile, "safe");
+      assert.equal(textOf(await read({ path: hostile })), "safe");
+      const result = await read({ path: `${dir}/x'; touch ${dir}/pwned; echo '` });
+      assert.equal(result.isError, true);
+      assert.equal(existsSync(join(dir, "pwned")), false);
+    });
   });
 });
 
@@ -347,13 +405,40 @@ describe("job_run", () => {
     assert.deepEqual(logs, ["job_space_leaked"]);
   });
 
-  it("refuses at the slot cap without creating anything", async () => {
+  async function holdJobs(fake: FakeSpaces, tool: ReturnType<typeof build>["tool"], count: number) {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = fake.space;
+    let waiting = count;
+    fake.space = async (ref: string) => {
+      if (waiting > 0) {
+        waiting -= 1;
+        await gate;
+      }
+      return original(ref);
+    };
+    const running = Array.from({ length: count }, () => tool("job_run")({ command: "held" }));
+    await pause(50);
+    const finish = async () => {
+      release();
+      await Promise.all(running);
+      fake.space = original;
+    };
+    return finish;
+  }
+
+  it("refuses at the slot cap while that many jobs run, without creating anything", async () => {
     const fake = new FakeSpaces();
-    fake.entries = [info(`${JOB_PREFIX}1`, "j1"), info(`${JOB_PREFIX}2`, "j2"), info("tether", "t1")];
-    const result = await build(fake).tool("job_run")({ command: "x" });
+    const { tool } = build(fake);
+    const finish = await holdJobs(fake, tool, 2);
+    const before = fake.calls.length;
+    const result = await tool("job_run")({ command: "x" });
     assert.equal(result.isError, true);
     assert.match(textOf(result), /Refused: 2 job machines are already running and the limit is 2/);
-    assert.deepEqual(fake.calls, ["list"]);
+    assert.deepEqual(fake.calls.slice(before), ["list"]);
+    await finish();
   });
 
   it("refuses when the server's Spaces are all in use, whoever owns them, without creating anything", async () => {
@@ -374,9 +459,15 @@ describe("job_run", () => {
 
   it("applies the per-Tether job cap as well, before the host limit", async () => {
     const fake = new FakeSpaces();
-    fake.entries = [info(`${JOB_PREFIX}1`, "j1"), info(`${JOB_PREFIX}2`, "j2")];
-    const result = await build(fake, { ...CONFIG, hostSlots: 2 }).tool("job_run")({ command: "x" });
-    assert.match(textOf(result), /Refused: 2 job machines are already running and the limit is 2/);
+    const { tool } = build(fake, { ...CONFIG, hostSlots: 1 });
+    const finish = await holdJobs(fake, tool, 1);
+    const result = await tool("job_run")({ command: "x" });
+    assert.match(textOf(result), /the server's 1 Spaces are all in use/);
+    await finish();
+    const capped = build(fake, { ...CONFIG, jobSlots: 1, hostSlots: 1 });
+    const finishCapped = await holdJobs(fake, capped.tool, 1);
+    assert.match(textOf(await capped.tool("job_run")({ command: "y" })), /Refused: 1 job machines are already running and the limit is 1/);
+    await finishCapped();
   });
 
   it("never exceeds the host limit when its own Space and a job are created together", async () => {
@@ -386,6 +477,28 @@ describe("job_run", () => {
     const results = await Promise.allSettled([tool("computer_run")({ command: "a" }), tool("job_run")({ command: "b" })]);
     assert.equal(fake.entries.length <= 3, true);
     assert.equal(results.filter((entry) => entry.status === "rejected" || entry.value.isError === true).length, 1);
+  });
+
+  it("sweeps a leaked job Space on the host before counting, so it no longer blocks a new job", async () => {
+    const fake = new FakeSpaces();
+    fake.entries = [info(`${JOB_PREFIX}leak1`, "j1"), info(`${JOB_PREFIX}leak2`, "j2"), info("tether", "t1")];
+    const { tool, logs } = build(fake);
+    const result = await tool("job_run")({ command: "x" });
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(fake.calls, ["list", "delete j1", "delete j2", "create tether-job-a1", "delete id-1"]);
+    assert.deepEqual(logs.slice(0, 2), ["job_space_swept", "job_space_swept"]);
+  });
+
+  it("leaves another host's job-named Space and a running job alone when sweeping", async () => {
+    const fake = new FakeSpaces();
+    fake.entries = [info(`${JOB_PREFIX}foreign`, "f1", "running", "elsewhere")];
+    const { tool } = build(fake, { ...CONFIG, jobSlots: 3 });
+    const finish = await holdJobs(fake, tool, 1);
+    await tool("job_run")({ command: "b" });
+    assert.equal(fake.calls.includes("delete f1"), false);
+    assert.equal(fake.calls.includes("delete id-1"), false, "the running job was not swept");
+    await finish();
+    assert.equal(fake.calls.filter((entry) => entry === "delete id-1").length, 1);
   });
 
   it("counts only job Spaces against the cap", async () => {

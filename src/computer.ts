@@ -1,7 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { SpaceCreateOptions, SpaceInfo } from "@trycua/cua";
 import { type AnyGuardedTool, defineAskFirstTool } from "./approval.ts";
@@ -24,7 +21,6 @@ export type BashResult = {
 export type SpacePort = {
   bash(command: string, timeoutMs: bigint | undefined): Promise<BashResult>;
   write(path: string, content: ArrayBuffer): Promise<unknown>;
-  download(remotePath: string, destDir: string): Promise<{ readonly dest: string }>;
 };
 
 export type SpacesPort = {
@@ -58,6 +54,11 @@ export function formatBash(result: BashResult): string {
   if (result.stderr) parts.push(`stderr:\n${tail(result.stderr)}`);
   return parts.join("\n");
 }
+
+export const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+
+export const readCommand = (path: string) =>
+  `f=${shellQuote(path)}; if [ ! -f "$f" ]; then echo "not a regular file" >&2; exit 3; fi; wc -c < "$f"; head -c ${READ_BYTES} -- "$f" | base64 -w0`;
 
 const succeeded = (result: BashResult) => !result.timedOut && !result.error && result.exitCode === 0;
 
@@ -112,7 +113,7 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
     createTurn(async () => {
       const api = await spaces();
       const all = await api.list();
-      const found = all.find((entry) => entry.name === config.spaceName);
+      const found = all.find((entry) => entry.name === config.spaceName && onHost(entry, config.hostRef));
       if (!found) {
         if (hostUsed(all) >= config.hostSlots) throw new Error(hostSlotsFull(config.hostSlots));
         const created = await api.create(createOptions(config.hostRef, config.spaceName));
@@ -129,7 +130,11 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
 
   const jobSpaces = async (api: SpacesPort) => (await api.list()).filter((entry) => entry.name.startsWith(JOB_PREFIX));
 
-  const bashSeconds = (timeoutSec: number | undefined) => BigInt(Math.min(MAX_TIMEOUT_SEC, timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000);
+  const bashSeconds = (timeoutSec: number | undefined) => {
+    const seconds = Math.trunc(Math.min(MAX_TIMEOUT_SEC, timeoutSec ?? DEFAULT_TIMEOUT_SEC));
+    return BigInt((Number.isFinite(seconds) ? Math.max(1, seconds) : DEFAULT_TIMEOUT_SEC) * 1000);
+  };
+  const inflight = new Set<string>();
 
   const run = defineAskFirstTool({
     name: "computer_run",
@@ -163,18 +168,14 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
     parameters: Type.Object({ path: Type.String({ minLength: 1 }) }),
     replay: "safe",
     execute: async (args) => {
-      const space = await ensureSpace();
-      const dir = mkdtempSync(join(tmpdir(), "tether-read-"));
-      try {
-        const report = await space.download(args.path, dir);
-        const file = statSync(report.dest).isDirectory() ? join(report.dest, basename(args.path)) : report.dest;
-        const data = readFileSync(file);
-        if (data.includes(0)) return failure(`${args.path} is a binary file.`);
-        const shown = data.subarray(0, READ_BYTES).toString("utf8");
-        return text(data.length > READ_BYTES ? `${shown}\n[cut at ${READ_BYTES} bytes of ${data.length}]` : shown);
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
+      const result = await (await ensureSpace()).bash(readCommand(args.path), 60000n);
+      if (!succeeded(result)) return failure(formatBash(result));
+      const newline = result.stdout.indexOf("\n");
+      const size = Number(result.stdout.slice(0, newline < 0 ? undefined : newline).trim());
+      const data = Buffer.from(newline < 0 ? "" : result.stdout.slice(newline + 1).trim(), "base64");
+      if (data.includes(0)) return failure(`${args.path} is a binary file.`);
+      const shown = data.toString("utf8");
+      return text(size > data.length ? `${shown}\n[cut at ${data.length} bytes of ${size}]` : shown);
     },
   });
 
@@ -191,12 +192,24 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
       const api = await spaces();
       const name = `${JOB_PREFIX}${jobId()}`;
       const made = await createTurn(async () => {
-        const all = await api.list();
+        const listed = await api.list();
+        const gone = new Set<string>();
+        for (const leaked of listed.filter((entry) => entry.name.startsWith(JOB_PREFIX) && onHost(entry, config.hostRef) && !inflight.has(entry.name))) {
+          try {
+            await api.delete_(leaked.id);
+            gone.add(leaked.id);
+            log("job_space_swept", { name: leaked.name });
+          } catch (error) {
+            log("job_space_leaked", { name: leaked.name, error: describeError(error) });
+          }
+        }
+        const all = listed.filter((entry) => !gone.has(entry.id));
         const running = all.filter((entry) => entry.name.startsWith(JOB_PREFIX)).length;
         if (running >= config.jobSlots) return `Refused: ${running} job machines are already running and the limit is ${config.jobSlots}. Try again later.`;
         if (hostUsed(all) >= config.hostSlots) return hostSlotsFull(config.hostSlots);
         const created = await api.create(createOptions(config.hostRef, name));
         if (!created.space) throw new Error(`Space ${name} was not created`);
+        inflight.add(name);
         return created.space;
       });
       if (typeof made === "string") return failure(made);
@@ -208,6 +221,8 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
           await api.delete_(made.id);
         } catch (error) {
           log("job_space_leaked", { name, error: describeError(error) });
+        } finally {
+          inflight.delete(name);
         }
       }
     },
