@@ -8,6 +8,7 @@ export const ROUTER_HEADERS: readonly string[] = [DEPLOYMENT_HEADER, FALLBACKS_H
 
 export const DEFAULT_REASON = "Claude didn't answer";
 export const BACK_TEXT = "Back on Claude.";
+export const FALLBACK_PREFIX = "Switched to the backup model";
 
 export type Served = {
   readonly model: string | undefined;
@@ -22,7 +23,7 @@ export function classifyTier(served: Served, group: string): Tier {
   return model !== undefined && (model === group || PRIMARY_MODEL.test(model)) ? "primary" : "fallback";
 }
 
-export const fallbackText = (reason: string): string => `Switched to the backup model: ${reason}.`;
+export const fallbackText = (reason: string): string => `${FALLBACK_PREFIX}: ${reason}.`;
 
 export function switchNotice(previous: Tier | null, next: Tier): string | null {
   if (previous === next) return null;

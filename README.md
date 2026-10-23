@@ -102,6 +102,10 @@ without the model. Text `RESUME` to continue.
     reason used);
   - back to the primary: `Back on Claude.`
 
+  The send path is at least once, as for `Stopped.` and `Resumed.`: a crash
+  right after a notice was sent, before the task recorded it, can repeat that
+  notice once.
+
   One text per switch, never one per reply. The first reply after a deploy
   sets the baseline and sends nothing, unless it came from the fallback. A
   restart neither repeats nor drops a notice. Replies that fail outright (the
@@ -146,7 +150,7 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 | `TETHER_LLM_API_KEY` | yes | the router virtual key |
 | `PHOTON_PROJECT_ID` | yes | Photon Spectrum project id |
 | `PHOTON_PROJECT_SECRET` | yes | Photon Spectrum project secret |
-| `TETHER_MODEL_GROUP` | no | router model group the app sends to, default `tether`; the router, not the app, falls back to `assistant` |
+| `TETHER_MODEL_GROUP` | no | router model group the app sends to, default `tether`; the router, not the app, falls back to `assistant`. The primary must be a Claude model: the switch texts and the tier detection assume Claude |
 | `TETHER_LLM_BASE_URL` | no | router base URL, default `http://127.0.0.1:4000`; `/v1` is appended unless the path already ends in it |
 | `TETHER_STATE_DIR` | no | state directory; falls back to `STATE_DIRECTORY`, which systemd sets to `/var/lib/tether` |
 

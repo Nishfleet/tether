@@ -6,12 +6,12 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { HarnessSettings } from "@earendil-works/pi-durable";
-import { startTether, type Tether, INSTRUCTIONS, STOPPED_TEXT, RESUMED_TEXT } from "../src/app.ts";
+import { startTether, type Tether, INSTRUCTIONS, STOPPED_TEXT, RESUMED_TEXT, NOT_STOPPED_TEXT } from "../src/app.ts";
 import { seedNote } from "./offline.ts";
 import { createModelAccess, MAX_OUTPUT_TOKENS } from "../src/model.ts";
 import { FAILURE_TEXT, MAX_PART_CHARS, TRUNCATED_MARKER } from "../src/reply.ts";
 import { ALLOWED, BACKUP_VIA, FakeChannel, FakeModel, KEY, SPACE, call, cut, fail, flatten, hold, inbound, say, via } from "./helpers.ts";
-import { BACK_TEXT, fallbackText, DEFAULT_REASON } from "../src/tier.ts";
+import { BACK_TEXT, fallbackText, DEFAULT_REASON, FALLBACK_PREFIX } from "../src/tier.ts";
 
 const opts = { timeout: 30000 };
 
@@ -299,8 +299,16 @@ describe("tether app, in process", () => {
     assert.equal(channel.sent[0]?.text, FAILURE_TEXT);
   });
 
-  const notices = () => channel.sent.map((entry) => entry.text).filter((text) => text === BACK_TEXT || text.startsWith("Switched to the backup model"));
-  const quiet = () => new Promise((resolve) => setTimeout(resolve, 300));
+  const notices = () => channel.sent.map((entry) => entry.text).filter((text) => text === BACK_TEXT || text.startsWith(FALLBACK_PREFIX));
+  let sentinel = 0;
+  const quiet = async () => {
+    sentinel += 1;
+    const before = channel.sent.length;
+    channel.push(inbound(`settle-${sentinel}`, "RESUME"));
+    await channel.sentCount(before + 1);
+    const at = channel.sent.findIndex((entry, index) => index >= before && entry.text === NOT_STOPPED_TEXT);
+    channel.sent.splice(at, 1);
+  };
 
   it("sends no notice for a reply from the primary model", opts, async () => {
     model.enqueue(say("one"), say("two"));
@@ -371,6 +379,22 @@ describe("tether app, in process", () => {
     await channel.sentCount(3);
     await quiet();
     assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON)]);
+  });
+
+  it("leaves the tier unchanged when a reply fails", opts, async () => {
+    model.enqueue(via(say("one"), BACKUP_VIA), fail(), fail(), fail(), fail(), fail(), fail());
+    await boot();
+    channel.push(inbound("m1", "a"));
+    await channel.sentCount(2);
+    channel.push(inbound("m2", "b"));
+    await channel.sentCount(3);
+    model.enqueue(via(say("three"), BACKUP_VIA));
+    channel.push(inbound("m3", "c"));
+    await channel.sentCount(4);
+    await quiet();
+    assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON)]);
+    assert.ok(channel.sent.some((entry) => entry.text === FAILURE_TEXT));
+    assert.ok(!channel.sent.some((entry) => entry.text === BACK_TEXT));
   });
 
   it("sends exactly one Back on Claude. when the primary answers again", opts, async () => {

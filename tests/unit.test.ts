@@ -5,7 +5,8 @@ import { describe, it } from "node:test";
 import { normalizeHandle } from "../src/channel.ts";
 import { loadConfig, loadPhotonConfig } from "../src/config.ts";
 import { classify } from "../src/control.ts";
-import { routerBaseUrl } from "../src/model.ts";
+import type { ProviderStreams } from "@earendil-works/pi-ai";
+import { routerApi, routerBaseUrl } from "../src/model.ts";
 import { classifyTier, switchNotice } from "../src/tier.ts";
 import { chmodSync, mkdtempSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -149,5 +150,32 @@ describe("tier", () => {
     assert.equal(switchNotice(null, "fallback"), "Switched to the backup model: Claude didn't answer.");
     assert.equal(switchNotice("primary", "fallback"), "Switched to the backup model: Claude didn't answer.");
     assert.equal(switchNotice("fallback", "primary"), "Back on Claude.");
+  });
+});
+
+describe("router stream wrapper", () => {
+  it("ends the stream and logs the error name when the wrapped stream throws", async () => {
+    const throwing = {
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(new TypeError("secret content must not be logged")) }),
+    };
+    const fail = (): never => {
+      throw new Error("unused");
+    };
+    const inner = { stream: () => throwing, streamSimple: fail } as unknown as ProviderStreams;
+    const logged: { event: string; fields: unknown }[] = [];
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onRejection);
+    try {
+      const out = routerApi(inner, (event, fields) => logged.push({ event, fields })).stream({} as never, {} as never);
+      const events: unknown[] = [];
+      for await (const event of out) events.push(event);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(events, []);
+      assert.deepEqual(logged, [{ event: "model_stream_failed", fields: { error: "TypeError" } }]);
+      assert.deepEqual(rejections, []);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
   });
 });

@@ -15,6 +15,7 @@ import {
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import { DEFAULT_MODEL_GROUP } from "./config.ts";
+import type { Log } from "./log.ts";
 import { ROUTER_DIAGNOSTIC, ROUTER_HEADERS } from "./tier.ts";
 
 const PROVIDER_ID = "router";
@@ -34,7 +35,11 @@ function eventMessage(event: AssistantMessageEvent): AssistantMessage {
   return event.partial;
 }
 
-function reportRouter<O extends StreamOptions>(open: (options: O) => AssistantMessageEventStream, options: O | undefined): AssistantMessageEventStream {
+function reportRouter<O extends StreamOptions>(
+  open: (options: O) => AssistantMessageEventStream,
+  options: O | undefined,
+  log: Log | undefined,
+): AssistantMessageEventStream {
   const details: JsonObject = {};
   const source = open({
     ...options,
@@ -56,6 +61,8 @@ function reportRouter<O extends StreamOptions>(open: (options: O) => AssistantMe
         }
         out.push(event);
       }
+    } catch (error) {
+      log?.("model_stream_failed", { error: error instanceof Error ? error.name : "unknown" });
     } finally {
       out.end();
     }
@@ -63,14 +70,14 @@ function reportRouter<O extends StreamOptions>(open: (options: O) => AssistantMe
   return out;
 }
 
-function routerApi(inner: ProviderStreams): ProviderStreams {
+export function routerApi(inner: ProviderStreams, log?: Log): ProviderStreams {
   return {
-    stream: (model, context, options) => reportRouter((opts) => inner.stream(model, context, opts), options),
-    streamSimple: (model, context, options) => reportRouter((opts) => inner.streamSimple(model, context, opts), options),
+    stream: (model, context, options) => reportRouter((opts) => inner.stream(model, context, opts), options, log),
+    streamSimple: (model, context, options) => reportRouter((opts) => inner.streamSimple(model, context, opts), options, log),
   };
 }
 
-export function createModelAccess(options: { baseUrl: string; apiKey: string; group?: string; contextWindow?: number }): { models: Models; ref: ModelRef } {
+export function createModelAccess(options: { baseUrl: string; apiKey: string; group?: string; contextWindow?: number; log?: Log }): { models: Models; ref: ModelRef } {
   const baseUrl = routerBaseUrl(options.baseUrl);
   const group = options.group ?? DEFAULT_MODEL_GROUP;
   const model: Model<"openai-completions"> = {
@@ -102,7 +109,7 @@ export function createModelAccess(options: { baseUrl: string; apiKey: string; gr
       },
     },
     models: [model],
-    api: routerApi(openAICompletionsApi()),
+    api: routerApi(openAICompletionsApi(), options.log),
   });
   const models = createModels();
   models.setProvider(provider);

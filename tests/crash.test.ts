@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { STOPPED_TEXT } from "../src/app.ts";
-import { BACK_TEXT } from "../src/tier.ts";
+import { BACK_TEXT, FALLBACK_PREFIX } from "../src/tier.ts";
 import { BACKUP_VIA, FakeModel, call, flatten, hold, inbound, say, via } from "./helpers.ts";
 import { commitStopWithoutAbort } from "./offline.ts";
 import { Tether } from "./process.ts";
@@ -161,7 +161,7 @@ describe("tether process, killed with SIGKILL and restarted", () => {
     assert.match(logs, /sender_not_allowed/);
   });
 
-  const notices = (sent: string[]) => sent.filter((text) => text === BACK_TEXT || text.startsWith("Switched to the backup model"));
+  const notices = (sent: string[]) => sent.filter((text) => text === BACK_TEXT || text.startsWith(FALLBACK_PREFIX));
 
   it("sends exactly one switch notice when killed between the reply and the notice", opts, async () => {
     model.enqueue(say("fine"), via(say("backup answer"), BACKUP_VIA));
