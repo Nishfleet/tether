@@ -58,7 +58,7 @@ export function formatBash(result: BashResult): string {
 export const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 
 export const readCommand = (path: string) =>
-  `f=${shellQuote(path)}; if [ ! -f "$f" ]; then echo "not a regular file" >&2; exit 3; fi; wc -c < "$f"; head -c ${READ_BYTES} -- "$f" | base64 -w0`;
+  `f=${shellQuote(path)}; if [ ! -f "$f" ]; then echo "not a regular file" >&2; exit 3; fi; if [ ! -r "$f" ]; then echo "not readable" >&2; exit 4; fi; wc -c < "$f"; head -c ${READ_BYTES} -- "$f" | base64 -w0`;
 
 const succeeded = (result: BashResult) => !result.timedOut && !result.error && result.exitCode === 0;
 
@@ -94,16 +94,49 @@ export function onHost(entry: SpaceInfo, hostRef: string): boolean {
   return entry.host.toLowerCase() === wanted || entry.hostName.toLowerCase() === wanted;
 }
 
+export const NOT_OURS = "refused: not a Tether Space";
+
+export function guardSpaces(api: SpacesPort, config: Pick<ComputerConfig, "spaceName" | "hostRef">): SpacesPort {
+  const ownName = (name: string | undefined) => name === config.spaceName || (name !== undefined && name.startsWith(JOB_PREFIX));
+  const ours = async (ref: string) => {
+    const all = await api.list();
+    const byId = all.filter((entry) => entry.id === ref);
+    const matches = byId.length > 0 ? byId : all.filter((entry) => entry.name === ref);
+    if (matches.length === 0 || !matches.every((entry) => ownName(entry.name) && onHost(entry, config.hostRef))) throw new Error(NOT_OURS);
+  };
+  return {
+    list: () => api.list(),
+    create: async (options) => {
+      if (!ownName(options.name) || (options.on ?? "") !== config.hostRef) throw new Error(NOT_OURS);
+      return api.create(options);
+    },
+    space: async (ref) => {
+      await ours(ref);
+      return api.space(ref);
+    },
+    start: async (ref) => {
+      await ours(ref);
+      return api.start(ref);
+    },
+    delete_: async (ref) => {
+      await ours(ref);
+      return api.delete_(ref);
+    },
+  };
+}
+
 export function createComputer(config: ComputerConfig, log: Log, deps: ComputerDeps = {}): Computer {
   const jobId = deps.jobId ?? (() => randomBytes(4).toString("hex"));
   const describeError = (error: unknown) =>
     error instanceof Error ? `${error.name}: ${error.message}`.replaceAll(config.token || "\0", "[token]").slice(0, 200) : "unknown";
   let client: Promise<SpacesPort> | undefined;
   const spaces = () => {
-    client ??= (deps.spaces ?? (() => defaultSpaces(config, deps.connect)))().catch((error: unknown) => {
-      client = undefined;
-      throw error;
-    });
+    client ??= (deps.spaces ?? (() => defaultSpaces(config, deps.connect)))()
+      .then((api) => guardSpaces(api, config))
+      .catch((error: unknown) => {
+        client = undefined;
+        throw error;
+      });
     return client;
   };
   const createTurn = serialize();
@@ -128,7 +161,7 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
       return api.space(found.id);
     });
 
-  const jobSpaces = async (api: SpacesPort) => (await api.list()).filter((entry) => entry.name.startsWith(JOB_PREFIX));
+  const jobSpaces = async (api: SpacesPort) => (await api.list()).filter((entry) => entry.name.startsWith(JOB_PREFIX) && onHost(entry, config.hostRef));
 
   const bashSeconds = (timeoutSec: number | undefined) => {
     const seconds = Math.trunc(Math.min(MAX_TIMEOUT_SEC, timeoutSec ?? DEFAULT_TIMEOUT_SEC));
@@ -173,6 +206,7 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
       const newline = result.stdout.indexOf("\n");
       const size = Number(result.stdout.slice(0, newline < 0 ? undefined : newline).trim());
       const data = Buffer.from(newline < 0 ? "" : result.stdout.slice(newline + 1).trim(), "base64");
+      if (!Number.isInteger(size) || data.length !== Math.min(size, READ_BYTES)) return failure(`${args.path} could not be read in full.`);
       if (data.includes(0)) return failure(`${args.path} is a binary file.`);
       const shown = data.toString("utf8");
       return text(size > data.length ? `${shown}\n[cut at ${data.length} bytes of ${size}]` : shown);
@@ -204,7 +238,7 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
           }
         }
         const all = listed.filter((entry) => !gone.has(entry.id));
-        const running = all.filter((entry) => entry.name.startsWith(JOB_PREFIX)).length;
+        const running = all.filter((entry) => entry.name.startsWith(JOB_PREFIX) && onHost(entry, config.hostRef)).length;
         if (running >= config.jobSlots) return `Refused: ${running} job machines are already running and the limit is ${config.jobSlots}. Try again later.`;
         if (hostUsed(all) >= config.hostSlots) return hostSlotsFull(config.hostSlots);
         const created = await api.create(createOptions(config.hostRef, name));

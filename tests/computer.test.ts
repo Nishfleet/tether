@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { SpaceCreateOptions, SpaceInfo } from "@trycua/cua";
 import { startTether, type Tether } from "../src/app.ts";
-import { type BashResult, createComputer, type SpacePort, type SpacesPort } from "../src/computer.ts";
+import { type BashResult, createComputer, guardSpaces, NOT_OURS, type SpacePort, type SpacesPort } from "../src/computer.ts";
 import { type ComputerConfig, JOB_PREFIX, loadConfig } from "../src/config.ts";
 import { createModelAccess } from "../src/model.ts";
 import { ALLOWED, FakeChannel, FakeModel, KEY, SPACE, call, inbound, say } from "./helpers.ts";
@@ -52,6 +52,10 @@ class FakeSpaces implements SpacesPort {
   readonly calls: string[] = [];
   readonly created: SpaceCreateOptions[] = [];
   next = 0;
+
+  get writes() {
+    return this.calls.filter((entry) => entry !== "list");
+  }
 
   list = async () => {
     this.calls.push("list");
@@ -172,7 +176,7 @@ describe("ensure Space", () => {
   it("creates its Space on the host provider when missing", async () => {
     const fake = new FakeSpaces();
     await build(fake).tool("computer_run")({ command: "uname" });
-    assert.deepEqual(fake.calls, ["list", "create tether"]);
+    assert.deepEqual(fake.writes, ["create tether"]);
     assert.equal(fake.created[0]?.on, "host:test");
   });
 
@@ -215,7 +219,7 @@ describe("ensure Space", () => {
     const fake = new FakeSpaces();
     fake.entries = [info("tether", "other-1", "stopped", "elsewhere")];
     await build(fake).tool("computer_run")({ command: "uname" });
-    assert.deepEqual(fake.calls, ["list", "create tether"]);
+    assert.deepEqual(fake.writes, ["create tether"]);
     assert.equal(fake.spaces.has("other-1"), false);
   });
 
@@ -230,21 +234,21 @@ describe("ensure Space", () => {
     const fake = new FakeSpaces();
     fake.entries = [info("tether", "id-9", "stopped")];
     await build(fake).tool("computer_run")({ command: "uname" });
-    assert.deepEqual(fake.calls, ["list", "start id-9"]);
+    assert.deepEqual(fake.writes, ["start id-9"]);
   });
 
   it("starts a suspended Space", async () => {
     const fake = new FakeSpaces();
     fake.entries = [info("tether", "id-9", "suspended")];
     await build(fake).tool("computer_run")({ command: "uname" });
-    assert.deepEqual(fake.calls, ["list", "start id-9"]);
+    assert.deepEqual(fake.writes, ["start id-9"]);
   });
 
   it("does nothing to a running Space", async () => {
     const fake = new FakeSpaces();
     fake.entries = [info("tether", "id-9")];
     await build(fake).tool("computer_run")({ command: "uname" });
-    assert.deepEqual(fake.calls, ["list"]);
+    assert.deepEqual(fake.writes, []);
   });
 
   it("creates only once when two calls arrive together", async () => {
@@ -311,6 +315,23 @@ describe("ensure Space", () => {
       }
     });
 
+    it("fails loudly on an unreadable file instead of returning it empty", { skip: process.getuid?.() === 0 }, async () => {
+      const locked = join(dir, "locked.txt");
+      writeFileSync(locked, "secret");
+      chmodSync(locked, 0);
+      const result = await read({ path: locked });
+      assert.equal(result.isError, true);
+      assert.match(textOf(result), /not readable/);
+    });
+
+    it("fails when the read comes back shorter than the file", async () => {
+      fake.spaces.get("id-1")!.shell = false;
+      fake.spaces.get("id-1")!.result = { stdout: "6\n", stderr: "", exitCode: 0, timedOut: false };
+      const result = await read({ path: "/x" });
+      assert.equal(result.isError, true);
+      assert.match(textOf(result), /could not be read in full/);
+    });
+
     it("keeps a hostile path inside one quoted word", async () => {
       const hostile = join(dir, "a'; echo pwned; echo 'b");
       writeFileSync(hostile, "safe");
@@ -322,13 +343,80 @@ describe("ensure Space", () => {
   });
 });
 
+describe("only its own Spaces", () => {
+  const stocked = () => {
+    const fake = new FakeSpaces();
+    fake.entries = [
+      info("desk", "d1"),
+      info("other-agent", "o1"),
+      info("tether", "t1"),
+      info(`${JOB_PREFIX}1`, "j1"),
+      info("tether", "t2", "running", "elsewhere"),
+      info(`${JOB_PREFIX}9`, "j9", "running", "elsewhere"),
+    ];
+    return { fake, guarded: guardSpaces(fake, CONFIG) };
+  };
+
+  it("refuses every write path for desk and another agent's Space, by id and by name", async () => {
+    const { fake, guarded } = stocked();
+    for (const ref of ["d1", "desk", "o1", "other-agent"]) {
+      await assert.rejects(guarded.start(ref), new RegExp(NOT_OURS), `start ${ref}`);
+      await assert.rejects(guarded.delete_(ref), new RegExp(NOT_OURS), `delete ${ref}`);
+      await assert.rejects(guarded.space(ref), new RegExp(NOT_OURS), `space ${ref}`);
+    }
+    assert.deepEqual(fake.writes, []);
+    assert.equal(fake.spaces.size, 0);
+  });
+
+  it("refuses Spaces that are unknown, on another host, or whose name also matches one on another host", async () => {
+    const { fake, guarded } = stocked();
+    for (const ref of ["nope", "t2", "j9", "tether-job-9", "tether"]) {
+      await assert.rejects(guarded.delete_(ref), new RegExp(NOT_OURS), ref);
+      await assert.rejects(guarded.space(ref), new RegExp(NOT_OURS), ref);
+    }
+    assert.deepEqual(fake.writes, []);
+  });
+
+  it("refuses to create anything but tether or tether-job-*, or on another host", async () => {
+    const { fake, guarded } = stocked();
+    const make = (name: string | undefined, on = "host:test") => ({ name, on, reuse: false, env: new Map(), services: new Map() });
+    for (const options of [make("desk"), make("other-agent"), make(undefined), make("tether-x"), make("tether", "host:elsewhere"), make("tether", "")]) {
+      await assert.rejects(guarded.create(options as never), new RegExp(NOT_OURS), String(options.name));
+    }
+    assert.deepEqual(fake.writes, []);
+    await guarded.create(make("tether-job-new") as never);
+    assert.deepEqual(fake.writes, ["create tether-job-new"]);
+  });
+
+  it("lets its own Space and its jobs through, by id and by name", async () => {
+    const { fake, guarded } = stocked();
+    await guarded.space("t1");
+    await guarded.space("tether-job-1");
+    await guarded.start("j1");
+    await guarded.delete_("tether-job-1");
+    assert.deepEqual(fake.writes, ["start j1", "delete tether-job-1"]);
+    assert.deepEqual((await guarded.list()).length, 6);
+  });
+
+  it("is the only handle the tools and the sweep get, so a desk Space is never touched by them", async () => {
+    const fake = new FakeSpaces();
+    fake.entries = [info("desk", "d1", "stopped"), info("other-agent", "o1"), info(`${JOB_PREFIX}old`, "j1")];
+    const { computer, tool } = build(fake);
+    await computer.startup();
+    await tool("computer_run")({ command: "x" });
+    await tool("job_run")({ command: "y" });
+    assert.equal(fake.writes.some((entry) => entry.endsWith(" d1") || entry.endsWith(" o1") || entry.endsWith(" desk")), false);
+    assert.deepEqual(fake.entries.map((entry) => entry.name).filter((name) => ["desk", "other-agent"].includes(name)), ["desk", "other-agent"]);
+  });
+});
+
 describe("startup", () => {
   it("deletes leftover job Spaces, keeps the others and ensures its own Space", async () => {
     const fake = new FakeSpaces();
     fake.entries = [info(`${JOB_PREFIX}old`, "j1"), info("desk", "d1"), info("tether", "t1")];
     const { computer, logs } = build(fake);
     await computer.startup();
-    assert.deepEqual(fake.calls, ["list", "delete j1", "list"]);
+    assert.deepEqual(fake.writes, ["delete j1"]);
     assert.deepEqual(logs, ["job_space_swept", "computer_ready"]);
   });
 
@@ -380,7 +468,7 @@ describe("job_run", () => {
     const fake = new FakeSpaces();
     const result = await build(fake).tool("job_run")({ command: "echo hello" });
     assert.equal(textOf(result), "exit code 0\nstdout:\nhello\n");
-    assert.deepEqual(fake.calls, ["list", "create tether-job-a1", "delete id-1"]);
+    assert.deepEqual(fake.writes, ["create tether-job-a1", "delete id-1"]);
     assert.equal(fake.entries.length, 0);
   });
 
@@ -392,7 +480,7 @@ describe("job_run", () => {
       return broken;
     };
     await assert.rejects(build(fake).tool("job_run")({ command: "x" }), /exec failed/);
-    assert.deepEqual(fake.calls, ["list", "create tether-job-a1", "delete id-1"]);
+    assert.deepEqual(fake.writes, ["create tether-job-a1", "delete id-1"]);
   });
 
   it("logs a leak instead of failing when the delete fails", async () => {
@@ -433,11 +521,11 @@ describe("job_run", () => {
     const fake = new FakeSpaces();
     const { tool } = build(fake);
     const finish = await holdJobs(fake, tool, 2);
-    const before = fake.calls.length;
+    const before = fake.writes.length;
     const result = await tool("job_run")({ command: "x" });
     assert.equal(result.isError, true);
     assert.match(textOf(result), /Refused: 2 job machines are already running and the limit is 2/);
-    assert.deepEqual(fake.calls.slice(before), ["list"]);
+    assert.deepEqual(fake.writes.slice(before), []);
     await finish();
   });
 
@@ -447,7 +535,7 @@ describe("job_run", () => {
     const result = await build(fake).tool("job_run")({ command: "x" });
     assert.equal(result.isError, true);
     assert.equal(textOf(result), "Refused: the server's 4 Spaces are all in use. Try again later.");
-    assert.deepEqual(fake.calls, ["list"]);
+    assert.deepEqual(fake.writes, []);
   });
 
   it("honours a configured host limit", async () => {
@@ -485,7 +573,7 @@ describe("job_run", () => {
     const { tool, logs } = build(fake);
     const result = await tool("job_run")({ command: "x" });
     assert.equal(result.isError, undefined);
-    assert.deepEqual(fake.calls, ["list", "delete j1", "delete j2", "create tether-job-a1", "delete id-1"]);
+    assert.deepEqual(fake.writes, ["delete j1", "delete j2", "create tether-job-a1", "delete id-1"]);
     assert.deepEqual(logs.slice(0, 2), ["job_space_swept", "job_space_swept"]);
   });
 
@@ -499,6 +587,14 @@ describe("job_run", () => {
     assert.equal(fake.calls.includes("delete id-1"), false, "the running job was not swept");
     await finish();
     assert.equal(fake.calls.filter((entry) => entry === "delete id-1").length, 1);
+  });
+
+  it("counts only this host's job Spaces against the cap", async () => {
+    const fake = new FakeSpaces();
+    fake.entries = [info(`${JOB_PREFIX}foreign1`, "f1", "running", "elsewhere"), info(`${JOB_PREFIX}foreign2`, "f2", "running", "elsewhere")];
+    const result = await build(fake, { ...CONFIG, jobSlots: 1 }).tool("job_run")({ command: "x" });
+    assert.equal(result.isError, undefined);
+    assert.equal(fake.writes.includes("delete f1"), false);
   });
 
   it("counts only job Spaces against the cap", async () => {
