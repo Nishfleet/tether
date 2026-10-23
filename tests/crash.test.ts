@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { STOPPED_TEXT } from "../src/app.ts";
-import { FakeModel, call, flatten, hold, inbound, say } from "./helpers.ts";
+import { BACK_TEXT } from "../src/tier.ts";
+import { BACKUP_VIA, FakeModel, call, flatten, hold, inbound, say, via } from "./helpers.ts";
 import { commitStopWithoutAbort } from "./offline.ts";
 import { Tether } from "./process.ts";
 
@@ -158,5 +159,46 @@ describe("tether process, killed with SIGKILL and restarted", () => {
     const logs = first.stderr.join("\n");
     assert.doesNotMatch(logs, /private question|intruder words|stranger@example|owner@example|router-key/);
     assert.match(logs, /sender_not_allowed/);
+  });
+
+  const notices = (sent: string[]) => sent.filter((text) => text === BACK_TEXT || text.startsWith("Switched to the backup model"));
+
+  it("sends exactly one switch notice when killed between the reply and the notice", opts, async () => {
+    model.enqueue(say("fine"), via(say("backup answer"), BACKUP_VIA));
+    const first = await start();
+    first.push(inbound("m1", "a"));
+    await first.logged("reply_sent");
+    await first.kill9();
+    const second = await start(true);
+    second.push(inbound("m2", "b"));
+    await second.until(() => second.sending.length >= 1);
+    await second.kill9();
+    assert.deepEqual(second.sent, []);
+    assert.deepEqual(notices(first.sent), []);
+
+    const third = await start();
+    await third.until(() => third.sent.length >= 2);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.deepEqual([...third.sent].sort(), ["Switched to the backup model: Claude didn't answer.", "backup answer"].sort());
+    assert.equal(notices([...first.sent, ...second.sent, ...third.sent]).length, 1, "one notice in total");
+    assert.equal(await third.terminate(), 0);
+  });
+
+  it("sends nothing for a restart with no switch", opts, async () => {
+    model.enqueue(via(say("backup one"), BACKUP_VIA));
+    const first = await start();
+    first.push(inbound("m1", "a"));
+    await first.logged("reply_sent", 2);
+    await first.kill9();
+    assert.equal(notices(first.sent).length, 1);
+
+    const second = await start();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.deepEqual(second.sent, [], "a restart alone sends nothing");
+    model.enqueue(via(say("backup two"), BACKUP_VIA));
+    second.push(inbound("m2", "b"));
+    await second.until(() => second.sent.length >= 1);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.deepEqual(second.sent, ["backup two"], "no second notice for the same tier");
   });
 });

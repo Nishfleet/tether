@@ -10,7 +10,8 @@ import { startTether, type Tether, INSTRUCTIONS, STOPPED_TEXT, RESUMED_TEXT } fr
 import { seedNote } from "./offline.ts";
 import { createModelAccess, MAX_OUTPUT_TOKENS } from "../src/model.ts";
 import { FAILURE_TEXT, MAX_PART_CHARS, TRUNCATED_MARKER } from "../src/reply.ts";
-import { ALLOWED, FakeChannel, FakeModel, KEY, SPACE, call, cut, fail, flatten, hold, inbound, say } from "./helpers.ts";
+import { ALLOWED, BACKUP_VIA, FakeChannel, FakeModel, KEY, SPACE, call, cut, fail, flatten, hold, inbound, say, via } from "./helpers.ts";
+import { BACK_TEXT, fallbackText, DEFAULT_REASON } from "../src/tier.ts";
 
 const opts = { timeout: 30000 };
 
@@ -71,7 +72,7 @@ describe("tether app, in process", () => {
     channel.push(inbound("m1", "hi tether"));
     await channel.sentCount(1);
     assert.deepEqual(channel.sent, [{ space: SPACE, text: "Hello there." }]);
-    assert.equal(model.requests[0]?.model, "assistant");
+    assert.equal(model.requests[0]?.model, "tether");
     assert.deepEqual(model.badAuth, []);
     assert.match(flatten(model.requests[0] as never), /hi tether/);
   });
@@ -296,5 +297,100 @@ describe("tether app, in process", () => {
     channel.push(inbound("m1", "hi"));
     await channel.sentCount(1);
     assert.equal(channel.sent[0]?.text, FAILURE_TEXT);
+  });
+
+  const notices = () => channel.sent.map((entry) => entry.text).filter((text) => text === BACK_TEXT || text.startsWith("Switched to the backup model"));
+  const quiet = () => new Promise((resolve) => setTimeout(resolve, 300));
+
+  it("sends no notice for a reply from the primary model", opts, async () => {
+    model.enqueue(say("one"), say("two"));
+    await boot();
+    channel.push(inbound("m1", "a"));
+    await channel.sentCount(1);
+    channel.push(inbound("m2", "b"));
+    await channel.sentCount(2);
+    await quiet();
+    assert.deepEqual(channel.sent.map((entry) => entry.text), ["one", "two"]);
+    assert.deepEqual(notices(), []);
+  });
+
+  it("sends exactly one switch notice when a primary reply is followed by a fallback reply", opts, async () => {
+    model.enqueue(say("one"), via(say("two"), BACKUP_VIA));
+    await boot();
+    channel.push(inbound("m1", "a"));
+    await channel.sentCount(1);
+    channel.push(inbound("m2", "b"));
+    await channel.sentCount(3);
+    await quiet();
+    assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON)]);
+    assert.equal(fallbackText(DEFAULT_REASON), "Switched to the backup model: Claude didn't answer.");
+    assert.deepEqual(channel.sent.map((entry) => entry.text).filter((text) => !notices().includes(text)), ["one", "two"]);
+    assert.ok(channel.sent.every((entry) => entry.space === SPACE));
+  });
+
+  it("sends no extra notice while replies keep coming from the fallback", opts, async () => {
+    model.enqueue(say("one"), via(say("two"), BACKUP_VIA), via(say("three"), BACKUP_VIA), via(say("four"), BACKUP_VIA));
+    await boot();
+    for (const [index, id] of ["m1", "m2", "m3", "m4"].entries()) {
+      channel.push(inbound(id, "q"));
+      await channel.sentCount(index + 1 + (index >= 1 ? 1 : 0));
+    }
+    await quiet();
+    assert.equal(channel.sent.length, 5);
+    assert.equal(notices().length, 1);
+  });
+
+  it("treats a fallback first reply after deploy as a switch", opts, async () => {
+    model.enqueue(via(say("one"), BACKUP_VIA));
+    await boot();
+    channel.push(inbound("m1", "a"));
+    await channel.sentCount(2);
+    await quiet();
+    assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON)]);
+  });
+
+  it("sends exactly one Back on Claude. when the primary answers again", opts, async () => {
+    model.enqueue(via(say("one"), BACKUP_VIA), say("two"), say("three"));
+    await boot();
+    channel.push(inbound("m1", "a"));
+    await channel.sentCount(2);
+    channel.push(inbound("m2", "b"));
+    await channel.sentCount(4);
+    channel.push(inbound("m3", "c"));
+    await channel.sentCount(5);
+    await quiet();
+    assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON), "Back on Claude."]);
+    assert.equal(BACK_TEXT, "Back on Claude.");
+  });
+
+  it("keeps the tier across a restart and sends nothing for the same tier", opts, async () => {
+    model.enqueue(via(say("one"), BACKUP_VIA));
+    await boot();
+    channel.push(inbound("m1", "a"));
+    await channel.sentCount(2);
+    await logged("reply_sent");
+    const before = channel.sent.map((entry) => entry.text);
+    await tether?.stop();
+    tether = undefined;
+    channel = new FakeChannel();
+    model.enqueue(via(say("two"), BACKUP_VIA));
+    await boot();
+    channel.push(inbound("m2", "b"));
+    await channel.sentCount(1);
+    await quiet();
+    assert.equal(before.length, 2);
+    assert.deepEqual(channel.sent.map((entry) => entry.text), ["two"]);
+  });
+
+  it("logs the deployment id and response model the router reported", opts, async () => {
+    model.enqueue(via(say("one"), BACKUP_VIA));
+    await boot();
+    channel.push(inbound("m1", "a"));
+    await logged("model_served");
+    const line = logs.find((entry) => entry.includes('"event":"model_served"')) ?? "";
+    assert.match(line, /"tier":"fallback"/);
+    assert.match(line, /"model":"deepseek-v4.1-flash"/);
+    assert.match(line, /"deployment":"deployment-backup"/);
+    assert.match(line, /"fallbacks":"1"/);
   });
 });

@@ -6,6 +6,7 @@ import { normalizeHandle } from "../src/channel.ts";
 import { loadConfig, loadPhotonConfig } from "../src/config.ts";
 import { classify } from "../src/control.ts";
 import { routerBaseUrl } from "../src/model.ts";
+import { classifyTier, switchNotice } from "../src/tier.ts";
 import { chmodSync, mkdtempSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
@@ -52,6 +53,13 @@ describe("config", () => {
     });
     assert.throws(() => loadConfig({ TETHER_ALLOWED_SENDER: "a", TETHER_LLM_API_KEY: "k" }), /TETHER_STATE_DIR or STATE_DIRECTORY/);
     assert.throws(() => loadPhotonConfig({}), /PHOTON_PROJECT_ID, PHOTON_PROJECT_SECRET/);
+  });
+
+  it("takes the model group from TETHER_MODEL_GROUP and defaults to tether", () => {
+    const base = { TETHER_ALLOWED_SENDER: "a", TETHER_LLM_API_KEY: "k", TETHER_STATE_DIR: "/x" };
+    assert.equal(loadConfig(base).modelGroup, "tether");
+    assert.equal(loadConfig({ ...base, TETHER_MODEL_GROUP: " other " }).modelGroup, "other");
+    assert.equal(loadConfig({ ...base, TETHER_MODEL_GROUP: " " }).modelGroup, "tether");
   });
 
   it("defaults the router to loopback port 4000 and takes the state directory from systemd", () => {
@@ -108,5 +116,24 @@ describe("supply chain", () => {
     const { imessage } = await import("spectrum-ts/providers/imessage");
     assert.equal(typeof Spectrum, "function");
     assert.equal(typeof imessage.config, "function");
+  });
+});
+
+describe("tier", () => {
+  it("classifies by the response model the router reports, never by anything else", () => {
+    assert.equal(classifyTier("claude-sonnet-5-5"), "primary");
+    assert.equal(classifyTier("anthropic/claude-sonnet-5-5"), "primary");
+    assert.equal(classifyTier("deepseek-v4.1-flash"), "fallback");
+    assert.equal(classifyTier("tether"), "fallback");
+    assert.equal(classifyTier(undefined), "fallback");
+  });
+
+  it("words one notice per switch and none for the baseline or the same tier", () => {
+    assert.equal(switchNotice(null, "primary"), null);
+    assert.equal(switchNotice("primary", "primary"), null);
+    assert.equal(switchNotice("fallback", "fallback"), null);
+    assert.equal(switchNotice(null, "fallback"), "Switched to the backup model: Claude didn't answer.");
+    assert.equal(switchNotice("primary", "fallback"), "Switched to the backup model: Claude didn't answer.");
+    assert.equal(switchNotice("fallback", "primary"), "Back on Claude.");
   });
 });

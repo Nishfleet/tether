@@ -47,9 +47,10 @@ without the model. Text `RESUME` to continue.
   around a `STOP` (once sent, once re-asked after `RESUME`).
   The `Stopped.` confirmation is best-effort across a crash: a kill before it
   is sent can lose it (the stopped state itself is kept).
-- **Models.** Only the LiteLLM router (OpenAI-compatible), model group
-  `assistant`, at `TETHER_LLM_BASE_URL` (default `http://127.0.0.1:4000`; the
-  client appends `/v1` unless the path already ends in it), with its own virtual key in `TETHER_LLM_API_KEY`.
+- **Models.** Only the LiteLLM router (OpenAI-compatible), at
+  `TETHER_LLM_BASE_URL` (default `http://127.0.0.1:4000`; the client appends
+  `/v1` unless the path already ends in it), with its own virtual key in
+  `TETHER_LLM_API_KEY`. See the Model section below.
 - **Memory.** The model has two tools, `memory_save` and `memory_forget`. Notes
   (up to 100, 500 characters each) live in a durable document in the same SQLite
   file and are listed in the system prompt of every request, so they survive
@@ -57,20 +58,56 @@ without the model. Text `RESUME` to continue.
 - **Tools.** Those two and nothing else.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
-  `assistant` group once the context passes `contextWindow - 16384` tokens
+  model group once the context passes `contextWindow - 16384` tokens
   (the app declares 128000), starts earlier in the background, and compacts and
   retries once if the router rejects a request as too long. Old entries stay in
   SQLite. A test runs a thread across a 2000-token window against the fake model
   and checks that a summarize request happens and replies keep working; the
-  default numbers above come from the library, not from that test. The window size is an assumption about the `assistant` group: the router
+  default numbers above come from the library, not from that test. The window size is an assumption about the model group: the router
   reports no context size for its deployments (`max_input_tokens` is null), so
   128000 is a conservative value, not a measured one. If the group is smaller,
   lower `contextWindow` in `src/model.ts`.
 
+## Model
+
+- **Primary: Claude Sonnet 5.5.** The app sends every request to the router
+  model group in `TETHER_MODEL_GROUP` (default `tether`). That group is
+  Claude Sonnet 5.5 on the router.
+- **Fallback: the `assistant` group** (DeepSeek V4.1 Flash). The app never
+  names it. The router falls back to it by itself when Claude fails (credit
+  used up, rate limit, outage, auth), so the same request is still answered.
+  Nish asked for this strong-to-cheaper fallback for Tether only.
+- **How the tier is detected.** For every model reply the app reads what the
+  router reported and stores it with the reply in the durable thread: the
+  response `model` field (the `model` of the streamed completion, kept by
+  Pi AI as `AssistantMessage.responseModel`) and, from the HTTP response
+  headers, `x-litellm-model-id` (the deployment that served it) and
+  `x-litellm-attempted-fallbacks`. The headers are read with the Pi AI
+  `onResponse` hook, in a thin wrapper around the OpenAI-compatible stream in
+  `src/model.ts`, and saved as an `AssistantMessage` diagnostic of type
+  `router_response`. The reply is `primary` when the response `model` contains
+  `claude` or `anthropic` (case-insensitive), and `fallback` for anything else,
+  including a missing `model`. Nothing is guessed from timing or errors. The
+  deployment id and fallback count are logged (`model_served`) but do not
+  decide the tier: the id is an opaque hash.
+- **Switch texts.** The last tier used is a durable document in the SQLite
+  file. When a reply's tier differs from it, one text goes to the owner
+  through the same durable send path as `Stopped.` and `Resumed.`, and the
+  stored tier is updated in the same commit that records the reply:
+  - to the fallback: `Switched to the backup model: Claude didn't answer.`
+    (LiteLLM reports no reason in its response headers, so this is the
+    reason used);
+  - back to the primary: `Back on Claude.`
+
+  One text per switch, never one per reply. The first reply after a deploy
+  sets the baseline and sends nothing, unless it came from the fallback. A
+  restart neither repeats nor drops a notice. Replies that fail outright (the
+  fixed apology) say nothing about the tier and leave it unchanged.
+
 ## Long replies
 
 The model may write up to 16384 output tokens per answer (`MAX_OUTPUT_TOKENS` in
-`src/model.ts`; the `assistant` group sets no cap of its own). An answer longer
+`src/model.ts`; the router groups set no cap of their own). An answer longer
 than 3500 characters is split at paragraph, line, sentence or word boundaries
 (or cut hard where a stretch has none) and sent as several texts in order. Delivery is at least once per part. Each part is its own durable checkpoint of
 the `tether.reply` task, so a retry or a restart continues with the next part.
@@ -106,6 +143,7 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 | `TETHER_LLM_API_KEY` | yes | the router virtual key |
 | `PHOTON_PROJECT_ID` | yes | Photon Spectrum project id |
 | `PHOTON_PROJECT_SECRET` | yes | Photon Spectrum project secret |
+| `TETHER_MODEL_GROUP` | no | router model group the app sends to, default `tether`; the router, not the app, falls back to `assistant` |
 | `TETHER_LLM_BASE_URL` | no | router base URL, default `http://127.0.0.1:4000`; `/v1` is appended unless the path already ends in it |
 | `TETHER_STATE_DIR` | no | state directory; falls back to `STATE_DIRECTORY`, which systemd sets to `/var/lib/tether` |
 

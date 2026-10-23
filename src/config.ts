@@ -4,6 +4,7 @@ export type Config = {
   readonly allowedSender: string;
   readonly llmBaseUrl: string;
   readonly llmApiKey: string;
+  readonly modelGroup: string;
   readonly stateDir: string;
 };
 
@@ -13,6 +14,7 @@ export type PhotonConfig = {
 };
 
 export const DEFAULT_LLM_BASE_URL = "http://127.0.0.1:4000";
+export const DEFAULT_MODEL_GROUP = "tether";
 
 function required(env: Env, names: readonly string[]): Record<string, string> {
   const found: Record<string, string> = {};
@@ -33,6 +35,7 @@ export function loadConfig(env: Env): Config {
   return {
     allowedSender: TETHER_ALLOWED_SENDER as string,
     llmApiKey: TETHER_LLM_API_KEY as string,
+    modelGroup: env.TETHER_MODEL_GROUP?.trim() || DEFAULT_MODEL_GROUP,
     llmBaseUrl: env.TETHER_LLM_BASE_URL?.trim() || DEFAULT_LLM_BASE_URL,
     stateDir,
   };
