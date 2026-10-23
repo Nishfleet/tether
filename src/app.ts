@@ -10,6 +10,7 @@ import {
   type Storage,
   type Tx,
 } from "@earendil-works/pi-durable";
+import { createCalendarExtension, type CalendarOptions } from "./calendar/tools.ts";
 import type { Channel, Inbound } from "./channel.ts";
 import { classify } from "./control.ts";
 import { type Pending, SEEN_LIMIT, StateDoc } from "./docs.ts";
@@ -23,7 +24,7 @@ export const INSTRUCTIONS = [
   "Each answer you write is sent as one reply and you cannot send a second message of your own, so never promise parts, follow-ups or a continuation later; finish the whole answer now.",
   "You can save and forget short notes with your memory tools; your saved notes are listed under memory.",
   "Save a note only when the person asks you to remember something.",
-  "You have no web access, no shell and no other tools. Say so if asked to do something outside chat and memory.",
+  "You have no web access and no shell. Say so if asked to do something outside chat, memory and the tools you are given.",
 ].join(" ");
 
 export const STOPPED_TEXT = "Stopped. Nothing will run until you text RESUME.";
@@ -41,6 +42,7 @@ export type TetherOptions = {
   readonly log: Log;
   readonly retryBaseMs?: number;
   readonly settings?: HarnessSettings;
+  readonly calendar?: CalendarOptions;
 };
 
 export type Tether = {
@@ -64,6 +66,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
   const task = createReplyTask({ channel, log, retryBaseMs: options.retryBaseMs ?? 5000, group: options.model.modelId });
   const registry = createRegistry();
   registry.install(createMemoryExtension([task]));
+  if (options.calendar) registry.install(createCalendarExtension(options.calendar));
   const harness = await Harness.open(
     options.storage,
     {
