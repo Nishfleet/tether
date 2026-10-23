@@ -44,12 +44,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request_target' || github.event.action == 'closed' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    # Pinned to a commit SHA, not the mutable `main` ref: a reusable workflow
-    # called on a mutable ref runs whatever that ref points to when the job
-    # starts, so an upstream push would control what executes here, with this
-    # repository's automatic token and checkout. Bump the SHA deliberately;
-    # Dependabot's github-actions updater keeps it current.
-    uses: Nishfleet/fleet-ops/.github/workflows/agent-dispatch.yml@c315bfa1d88e02f3304236f6adff79add14bef79 # fleet-ops main, 2026-10-14
+    uses: Nishfleet/fleet-ops/.github/workflows/agent-dispatch.yml@main # same ref runner group 3 enforces for agent.yml; a SHA pin here drifts from agent.yml@main and strands jobs (0509#5231)
     permissions:
       issues: write
       pull-requests: write
