@@ -30,24 +30,23 @@ export function textOwnerTool(options: { channel: Channel; log: Log }) {
     parameters: Type.Object({ text: Type.String({ minLength: 1, maxLength: TEXT_CHARS }) }),
     executionMode: "sequential",
     execute: async (args, api, context) => {
-      if ((await api.snapshot(StateDoc, context))?.stopped) return failure("Stopped. Nothing was sent.");
       const space = (await api.snapshot(OwnerDoc, context))?.space;
       if (!space) return failure("No chat to text yet.");
       const now = api.now();
-      const allowed = await api.commit(async (tx) => {
-        const outbox = await tx.doc(OutboxDoc);
-        const recent = outbox.sent.filter((at) => now - at < TEXT_WINDOW_MS);
-        if (recent.length >= TEXT_LIMIT) return false;
-        outbox.sent.splice(0, outbox.sent.length, ...recent, now);
-        return true;
-      }, context);
-      if (!allowed) return failure(`Too many extra texts (${TEXT_LIMIT} in ${TEXT_WINDOW_MS / 60000} minutes). Put the rest in your final answer.`);
+      const recent = ((await api.snapshot(OutboxDoc, context))?.sent ?? []).filter((at) => now - at < TEXT_WINDOW_MS);
+      if (recent.length >= TEXT_LIMIT) return failure(`Too many extra texts (${TEXT_LIMIT} in ${TEXT_WINDOW_MS / 60000} minutes). Put the rest in your final answer.`);
+      const clear = await api.commit(async (tx) => !(await tx.doc(StateDoc)).stopped, context);
+      if (!clear) return failure("Stopped. Nothing was sent.");
       try {
         await channel.send(space, args.text);
       } catch (error) {
         log("owner_text_failed", { error: error instanceof Error ? error.name : "unknown" });
         return failure("The text could not be sent. Put it in your final answer instead.");
       }
+      await api.commit(async (tx) => {
+        const outbox = await tx.doc(OutboxDoc);
+        outbox.sent.splice(0, outbox.sent.length, ...outbox.sent.filter((at) => now - at < TEXT_WINDOW_MS), now);
+      }, context);
       return text("Sent.");
     },
   });

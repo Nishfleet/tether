@@ -44,4 +44,18 @@ describe("text_owner", () => {
     assert.match(flatten(rig.model.requests.at(-1) as never), /could not be sent/);
     assert.equal(rig.texts().at(-1), "final answer");
   });
+
+  it("does not count a failed send against the limit", opts, async () => {
+    const calls = Array.from({ length: TEXT_LIMIT + 2 }, (_, index) => call("text_owner", { text: `part ${index + 1}` }));
+    rig.model.enqueue(...calls, say("final"));
+    await rig.boot();
+    rig.channel.failures = 1;
+    rig.channel.push(inbound("m1", "spam"));
+    await rig.channel.sentCount(TEXT_LIMIT + 1);
+    assert.equal(rig.texts().filter((sent) => sent.startsWith("part ")).length, TEXT_LIMIT);
+    assert.doesNotMatch(rig.texts().join("|"), /part 1\b(?!\d)/);
+    const last = flatten(rig.model.requests.at(-1) as never);
+    assert.match(last, /could not be sent/);
+    assert.match(last, /Too many extra texts/);
+  });
 });
