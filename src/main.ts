@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { startTether, type Tether } from "./app.ts";
 import type { AnyGuardedTool } from "./approval.ts";
+import { loadCalendarConfig } from "./calendar/config.ts";
+import { openCalendar } from "./calendar/index.ts";
 import type { Channel } from "./channel.ts";
 import { type Env, loadConfig } from "./config.ts";
 import type { Log } from "./log.ts";
@@ -22,6 +24,8 @@ export async function run(
   chmodSync(config.stateDir, 0o700);
   const storage = await openNodeSqliteStorage(join(config.stateDir, DATABASE_FILE));
   const { models, ref } = createModelAccess({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey, group: config.modelGroup, log });
+  const calendar = openCalendar(loadCalendarConfig(env, config.timeZone));
+  log("calendar", { sources: calendar ? calendar.backends.calendar.map((backend) => backend.source).join(",") : "" });
   const channel = await openChannel(env, log);
   return startTether({
     channel,
@@ -32,6 +36,7 @@ export async function run(
     salt: loadSalt(config.stateDir),
     log,
     timeZone: config.timeZone,
+    ...(calendar ? { calendar } : {}),
     ...(overrides.retryBaseMs === undefined ? {} : { retryBaseMs: overrides.retryBaseMs }),
     ...(overrides.tools === undefined ? {} : { tools: overrides.tools }),
   });
