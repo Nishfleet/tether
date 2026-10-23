@@ -40,25 +40,30 @@ export async function spectrumChannel(photon: PhotonConfig, log: Log): Promise<C
           return found.read();
         },
       }));
-      const fields = message as unknown as Record<string, unknown>;
-      const miniApp = fields.miniApp as { url?: string } | undefined;
-      const sources = [message.content.type === "text" ? message.content.text : undefined, miniApp?.url, str(fields.nativeText), str(fields.subject)];
-      const shared = linkAttachment(...sources);
-      if (shared) attachments.push(shared);
-      if (message.content.type !== "text") {
-        log("inbound_content", {
-          id: message.id,
-          type: message.content.type,
-          attachments: attachments.length,
-          balloon: str(fields.balloonBundleId) ?? "",
-          miniApp: miniApp !== undefined,
-          miniAppUrl: str(miniApp?.url) !== undefined,
-          nativeTextChars: str(fields.nativeText)?.length ?? 0,
-          subjectChars: str(fields.subject)?.length ?? 0,
-          itemType: str(fields.itemType) ?? "",
-          sharedLink: shared !== undefined,
-          keys: Object.keys(fields).sort().join(","),
-        });
+      try {
+        const fields = message as unknown as Record<string, unknown>;
+        const miniApp = fields.miniApp as { url?: unknown } | undefined;
+        const miniAppUrl = str(miniApp?.url);
+        const sources = [message.content.type === "text" ? message.content.text : undefined, miniAppUrl, str(fields.nativeText), str(fields.subject)];
+        const shared = linkAttachment(...sources);
+        if (shared) attachments.push(shared);
+        if (message.content.type !== "text") {
+          log("inbound_content", {
+            id: message.id,
+            type: message.content.type,
+            attachments: attachments.length,
+            balloon: str(fields.balloonBundleId) ?? "",
+            miniApp: miniApp !== undefined,
+            miniAppUrl: miniAppUrl !== undefined,
+            nativeTextChars: str(fields.nativeText)?.length ?? 0,
+            subjectChars: str(fields.subject)?.length ?? 0,
+            itemType: str(fields.itemType) ?? "",
+            sharedLink: shared !== undefined,
+            keys: Object.keys(fields).sort().join(","),
+          });
+        }
+      } catch (error) {
+        log("inbound_shape_failed", { id: message.id, error: error instanceof Error ? error.name : "unknown" });
       }
       yield {
         id: message.id,

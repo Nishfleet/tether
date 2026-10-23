@@ -91,6 +91,14 @@ describe("maps links from rich messages", () => {
     assert.equal(linkAttachment("no links here"), undefined);
   });
 
+  it("refuses lookalike hosts, ignores non-text sources, and reads a Google maps link", async () => {
+    assert.deepEqual(mapsLinks("https://maps.google.evil.test/?ll=37.7,-122.4", "https://google.evil.test/maps?ll=1,2", "https://maps.apple.com.evil.test/?ll=1,2"), []);
+    assert.deepEqual(mapsLinks("https://maps.google.co.uk/?q=51.5,-0.12", "https://www.google.de/maps/@52.5,13.4,15z"), ["https://maps.google.co.uk/?q=51.5,-0.12", "https://www.google.de/maps/@52.5,13.4,15z"]);
+    assert.deepEqual(mapsLinks({ href: "https://maps.apple.com/?ll=1,2" } as never, 42 as never, null as never), []);
+    const found = linkAttachment("https://www.google.com/maps/@51.5,-0.12,15z");
+    assert.deepEqual(parseLocation((await found?.read())?.toString("utf8") ?? ""), { latitude: 51.5, longitude: -0.12, label: null });
+  });
+
   it("treats a message that is only a map link as a location, and a sentence with a link as chat", () => {
     const link = "https://maps.apple.com/?ll=12.9689,77.5842";
     const attachments = [linkAttachment(link)].filter((entry) => entry !== undefined);

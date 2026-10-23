@@ -105,8 +105,8 @@ export function parseLocation(vcard: string): Coordinates | undefined {
   return undefined;
 }
 
-const MAPS_HOST = /^(?:maps\.apple\.com|maps\.google\.[a-z.]+|maps\.app\.goo\.gl)$/i;
-const GOOGLE_HOST = /^(?:www\.)?google\.[a-z.]+$/i;
+const MAPS_HOST = /^(?:maps\.apple\.com|maps\.google\.(?:com|co\.[a-z]{2}|[a-z]{2,3})|maps\.app\.goo\.gl)$/i;
+const GOOGLE_HOST = /^(?:www\.)?google\.(?:com|co\.[a-z]{2}|[a-z]{2,3})$/i;
 const LINK_IN_TEXT = /https?:\/\/[^\s<>"']+/gi;
 
 function isMapsUrl(value: string): boolean {
@@ -119,7 +119,7 @@ function isMapsUrl(value: string): boolean {
 }
 
 export function mapsLinks(...sources: readonly (string | undefined)[]): string[] {
-  return sources.flatMap((source) => (source ?? "").match(LINK_IN_TEXT) ?? []).filter(isMapsUrl);
+  return sources.flatMap((source) => (typeof source === "string" ? source.match(LINK_IN_TEXT) : null) ?? []).filter(isMapsUrl);
 }
 
 export function isMapsLinkOnly(value: string): boolean {
