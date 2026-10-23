@@ -1,9 +1,11 @@
 import { withAbortSignal } from "@earendil-works/chord/context";
 import { defineTask, type EntryId, type Task, type TaskRuntime, type Tx } from "@earendil-works/pi-durable";
 import type { Context } from "@earendil-works/chord";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Channel } from "./channel.ts";
-import { StateDoc } from "./docs.ts";
+import { StateDoc, TierDoc } from "./docs.ts";
 import type { Log } from "./log.ts";
+import { classifyTier, DEPLOYMENT_HEADER, FALLBACKS_HEADER, ROUTER_DIAGNOSTIC, switchNotice, type Served, type Tier } from "./tier.ts";
 
 export type ReplyInput = {
   space: string;
@@ -60,18 +62,27 @@ const release = async (tx: Tx, inbound: string | null) => {
   if (index >= 0) state.inflight.splice(index, 1);
 };
 
-async function answerText(runtime: Runtime, entry: EntryId, context: Context): Promise<string | undefined> {
+type Answer = { text: string; tier: Tier; served: Served };
+
+function servedBy(last: AssistantMessage): Served {
+  const details = last.diagnostics?.find((entry) => entry.type === ROUTER_DIAGNOSTIC)?.details;
+  const header = (name: string) => (typeof details?.[name] === "string" ? details[name] : undefined);
+  return { model: last.responseModel, deployment: header(DEPLOYMENT_HEADER), fallbacks: header(FALLBACKS_HEADER) };
+}
+
+async function readAnswer(group: string, runtime: Runtime, entry: EntryId, context: Context): Promise<Answer | undefined> {
   const record = await runtime.entry(entry, context);
   const last = (record?.model ?? []).findLast((message) => message.role === "assistant");
   if (last?.role !== "assistant") return undefined;
   const joined = last.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n").trim();
   if (joined === "") return undefined;
-  return last.stopReason === "length" ? `${joined}\n\n${TRUNCATED_MARKER}` : joined;
+  const served = servedBy(last);
+  return { text: last.stopReason === "length" ? `${joined}\n\n${TRUNCATED_MARKER}` : joined, tier: classifyTier(served, group), served };
 }
 
-export function createReplyTask(options: { channel: Channel; log: Log; retryBaseMs: number }): Task<ReplyInput, ReplyState, null, object> {
-  const { channel, log, retryBaseMs } = options;
-  return defineTask<ReplyInput, ReplyState, null>({
+export function createReplyTask(options: { channel: Channel; log: Log; retryBaseMs: number; group: string }): Task<ReplyInput, ReplyState, null, object> {
+  const { channel, log, retryBaseMs, group } = options;
+  const self: Task<ReplyInput, ReplyState, null, object> = defineTask<ReplyInput, ReplyState, null>({
     name: "tether.reply",
     version: 1,
     initial: (input) => (input.prompt === null ? { phase: "send", text: input.notice ?? "", attempt: 0 } : { phase: "ask" }),
@@ -87,12 +98,22 @@ export function createReplyTask(options: { channel: Channel; log: Log; retryBase
         );
         const settled = await submission.wait(aborting);
         const answer = settled.status === "done" ? settled.answer : undefined;
-        const text = answer === undefined ? undefined : await answerText(runtime, answer, aborting);
+        const read = answer === undefined ? undefined : await readAnswer(group, runtime, answer, aborting);
         if (settled.status !== "done") log("model_unanswered", { reason: settled.reason });
-        await runtime.commit(
-          () => ({ status: "running", checkpoint: { phase: "send", text: text ?? FAILURE_TEXT, attempt: 0 } }),
-          context,
-        );
+        if (read) log("model_served", { tier: read.tier, model: read.served.model ?? "", deployment: read.served.deployment ?? "", fallbacks: read.served.fallbacks ?? "" });
+        const { space } = task.input;
+        await runtime.commit(async (tx) => {
+          if (read) {
+            const tiers = await tx.doc(TierDoc);
+            const text = switchNotice(tiers.tier, read.tier);
+            tiers.tier = read.tier;
+            if (text !== null) {
+              const input: ReplyInput = { space, inbound: null, prompt: null, notice: text, run: 0 };
+              await tx.createTask(self, input, { ownership: { kind: "conversation" }, conversationId: runtime.conversationId });
+            }
+          }
+          return { status: "running", checkpoint: { phase: "send", text: read?.text ?? FAILURE_TEXT, attempt: 0 } };
+        }, context);
       },
       send: async (task, runtime, context) => {
         const { text, attempt } = task.state.checkpoint;
@@ -131,4 +152,5 @@ export function createReplyTask(options: { channel: Channel; log: Log; retryBase
       await runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context);
     },
   });
+  return self;
 }

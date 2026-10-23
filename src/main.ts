@@ -20,7 +20,7 @@ export async function run(
   mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
   chmodSync(config.stateDir, 0o700);
   const storage = await openNodeSqliteStorage(join(config.stateDir, DATABASE_FILE));
-  const { models, ref } = createModelAccess({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey });
+  const { models, ref } = createModelAccess({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey, group: config.modelGroup, log });
   const channel = await openChannel(env, log);
   return startTether({
     channel,

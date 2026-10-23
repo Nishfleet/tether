@@ -14,13 +14,24 @@ export type ChatRequest = {
   tools?: { function: { name: string } }[];
 };
 
-export type Reply =
+export type Via = { model: string; headers: Record<string, string> };
+
+export const PRIMARY_VIA: Via = { model: "claude-sonnet-5-5", headers: { "x-litellm-model-id": "deployment-claude" } };
+export const BACKUP_VIA: Via = {
+  model: "deepseek-v4.1-flash",
+  headers: { "x-litellm-model-id": "deployment-backup", "x-litellm-attempted-fallbacks": "1" },
+};
+
+export type Reply = (
   | { kind: "text"; text: string }
   | { kind: "cut"; text: string }
   | { kind: "tool"; name: string; args: Record<string, unknown> }
   | { kind: "toolText"; text: string; name: string; args: Record<string, unknown> }
   | { kind: "hold" }
-  | { kind: "fail" };
+  | { kind: "fail" }
+) & { via?: Via };
+
+export const via = <T extends Reply>(reply: T, served: Via): T => ({ ...reply, via: served });
 
 export const say = (text: string): Reply => ({ kind: "text", text });
 export const cut = (text: string): Reply => ({ kind: "cut", text });
@@ -97,10 +108,12 @@ export class FakeModel {
     }
     if (reply.kind === "hold") {
       res.writeHead(200, { "content-type": "text/event-stream" });
-      res.write(`data: ${JSON.stringify(chunk({ role: "assistant", content: "" }, null))}\n\n`);
+      res.write(`data: ${JSON.stringify(chunkOf(PRIMARY_VIA.model, { role: "assistant", content: "" }, null))}\n\n`);
       return;
     }
-    res.writeHead(200, { "content-type": "text/event-stream" });
+    const served = reply.via ?? PRIMARY_VIA;
+    const chunk = (delta: Record<string, unknown>, finish: string | null) => chunkOf(served.model, delta, finish);
+    res.writeHead(200, { "content-type": "text/event-stream", ...served.headers });
     if (reply.kind === "toolText") {
       const delta = {
         role: "assistant",
@@ -125,8 +138,8 @@ export class FakeModel {
   }
 }
 
-function chunk(delta: Record<string, unknown>, finish: string | null) {
-  return { id: "chatcmpl-fake", object: "chat.completion.chunk", created: 0, model: "assistant", choices: [{ index: 0, delta, finish_reason: finish }] };
+function chunkOf(model: string, delta: Record<string, unknown>, finish: string | null) {
+  return { id: "chatcmpl-fake", object: "chat.completion.chunk", created: 0, model, choices: [{ index: 0, delta, finish_reason: finish }] };
 }
 
 export function inbound(id: string, text: string | undefined, overrides: Partial<Inbound> = {}): Inbound {

@@ -5,7 +5,9 @@ import { describe, it } from "node:test";
 import { normalizeHandle } from "../src/channel.ts";
 import { loadConfig, loadPhotonConfig } from "../src/config.ts";
 import { classify } from "../src/control.ts";
-import { routerBaseUrl } from "../src/model.ts";
+import type { ProviderStreams } from "@earendil-works/pi-ai";
+import { routerApi, routerBaseUrl } from "../src/model.ts";
+import { classifyTier, switchNotice } from "../src/tier.ts";
 import { chmodSync, mkdtempSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
@@ -52,6 +54,13 @@ describe("config", () => {
     });
     assert.throws(() => loadConfig({ TETHER_ALLOWED_SENDER: "a", TETHER_LLM_API_KEY: "k" }), /TETHER_STATE_DIR or STATE_DIRECTORY/);
     assert.throws(() => loadPhotonConfig({}), /PHOTON_PROJECT_ID, PHOTON_PROJECT_SECRET/);
+  });
+
+  it("takes the model group from TETHER_MODEL_GROUP and defaults to tether", () => {
+    const base = { TETHER_ALLOWED_SENDER: "a", TETHER_LLM_API_KEY: "k", TETHER_STATE_DIR: "/x" };
+    assert.equal(loadConfig(base).modelGroup, "tether");
+    assert.equal(loadConfig({ ...base, TETHER_MODEL_GROUP: " other " }).modelGroup, "other");
+    assert.equal(loadConfig({ ...base, TETHER_MODEL_GROUP: " " }).modelGroup, "tether");
   });
 
   it("defaults the router to loopback port 4000 and takes the state directory from systemd", () => {
@@ -108,5 +117,65 @@ describe("supply chain", () => {
     const { imessage } = await import("spectrum-ts/providers/imessage");
     assert.equal(typeof Spectrum, "function");
     assert.equal(typeof imessage.config, "function");
+  });
+});
+
+describe("tier", () => {
+  const served = (model: string | undefined, fallbacks?: string) => ({ model, deployment: undefined, fallbacks });
+
+  it("classifies by the model the router reports: the group alias or a Claude model is primary", () => {
+    assert.equal(classifyTier(served("tether"), "tether"), "primary");
+    assert.equal(classifyTier(served("claude-sonnet-5-5"), "tether"), "primary");
+    assert.equal(classifyTier(served("anthropic/claude-sonnet-5-5"), "tether"), "primary");
+    assert.equal(classifyTier(served("custom-group"), "custom-group"), "primary");
+    assert.equal(classifyTier(served("assistant"), "tether"), "fallback");
+    assert.equal(classifyTier(served("deepseek-v4.1-flash"), "tether"), "fallback");
+    assert.equal(classifyTier(served(undefined), "tether"), "fallback");
+  });
+
+  it("lets x-litellm-attempted-fallbacks decide when it is present", () => {
+    assert.equal(classifyTier(served("tether", "1"), "tether"), "fallback");
+    assert.equal(classifyTier(served("claude-sonnet-5-5", "2"), "tether"), "fallback");
+    assert.equal(classifyTier(served("deepseek-v4.1-flash", "1"), "tether"), "fallback");
+    assert.equal(classifyTier(served("tether", "0"), "tether"), "primary");
+    assert.equal(classifyTier(served("assistant", "0"), "tether"), "primary");
+    assert.equal(classifyTier(served(undefined, "0"), "tether"), "primary");
+    assert.equal(classifyTier(served("assistant", "not-a-number"), "tether"), "fallback");
+  });
+
+  it("words one notice per switch and none for the baseline or the same tier", () => {
+    assert.equal(switchNotice(null, "primary"), null);
+    assert.equal(switchNotice("primary", "primary"), null);
+    assert.equal(switchNotice("fallback", "fallback"), null);
+    assert.equal(switchNotice(null, "fallback"), "Switched to the backup model: Claude didn't answer.");
+    assert.equal(switchNotice("primary", "fallback"), "Switched to the backup model: Claude didn't answer.");
+    assert.equal(switchNotice("fallback", "primary"), "Back on Claude.");
+  });
+});
+
+describe("router stream wrapper", () => {
+  it("ends the stream and logs the error name when the wrapped stream throws", async () => {
+    const throwing = {
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(new TypeError("secret content must not be logged")) }),
+    };
+    const fail = (): never => {
+      throw new Error("unused");
+    };
+    const inner = { stream: () => throwing, streamSimple: fail } as unknown as ProviderStreams;
+    const logged: { event: string; fields: unknown }[] = [];
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onRejection);
+    try {
+      const out = routerApi(inner, (event, fields) => logged.push({ event, fields })).stream({} as never, {} as never);
+      const events: unknown[] = [];
+      for await (const event of out) events.push(event);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(events, []);
+      assert.deepEqual(logged, [{ event: "model_stream_failed", fields: { error: "TypeError" } }]);
+      assert.deepEqual(rejections, []);
+    } finally {
+      process.off("unhandledRejection", onRejection);
+    }
   });
 });
