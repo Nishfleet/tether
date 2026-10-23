@@ -49,6 +49,7 @@ export type SpacesPort = {
 export type ComputerDeps = {
   readonly spaces?: () => Promise<SpacesPort>;
   readonly jobId?: () => string;
+  readonly connect?: Connect;
 };
 
 export type Computer = {
@@ -119,9 +120,11 @@ function serialize() {
   };
 }
 
-async function defaultSpaces(config: ComputerConfig): Promise<SpacesPort> {
-  const { connect } = await import("@trycua/cua");
-  return connect(config.url, config.token).spaces();
+export type Connect = (...address: [url: string] | [url: string, token: string]) => { spaces(): SpacesPort };
+
+async function defaultSpaces(config: ComputerConfig, connectOverride: Connect | undefined): Promise<SpacesPort> {
+  const connect = connectOverride ?? (await import("@trycua/cua")).connect;
+  return (config.token ? connect(config.url, config.token) : connect(config.url)).spaces();
 }
 
 const createOptions = (on: string, name: string): SpaceCreateOptions => ({
@@ -143,10 +146,10 @@ export function onHost(entry: SpaceInfo, hostRef: string): boolean {
 export function createComputer(config: ComputerConfig, log: Log, deps: ComputerDeps = {}): Computer {
   const jobId = deps.jobId ?? (() => randomBytes(4).toString("hex"));
   const describeError = (error: unknown) =>
-    error instanceof Error ? `${error.name}: ${error.message}`.replaceAll(config.token, "[token]").slice(0, 200) : "unknown";
+    error instanceof Error ? `${error.name}: ${error.message}`.replaceAll(config.token || "\0", "[token]").slice(0, 200) : "unknown";
   let client: Promise<SpacesPort> | undefined;
   const spaces = () => {
-    client ??= (deps.spaces ?? (() => defaultSpaces(config)))().catch((error: unknown) => {
+    client ??= (deps.spaces ?? (() => defaultSpaces(config, deps.connect)))().catch((error: unknown) => {
       client = undefined;
       throw error;
     });

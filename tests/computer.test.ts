@@ -144,31 +144,41 @@ describe("computer config", () => {
   const base = { TETHER_ALLOWED_SENDER: "a", TETHER_LLM_API_KEY: "k", TETHER_STATE_DIR: "/state" };
   const cua = { ...base, TETHER_CUA_URL: "http://127.0.0.1:7777", TETHER_CUA_TOKEN: TOKEN };
 
-  it("registers nothing unless both the daemon URL and token are set", () => {
+  it("registers nothing unless the daemon URL is set, whatever the token", () => {
     assert.equal(loadConfig(base).computer, undefined);
-    assert.equal(loadConfig({ ...base, TETHER_CUA_URL: " ", TETHER_CUA_TOKEN: " " }).computer, undefined);
+    assert.equal(loadConfig({ ...base, TETHER_CUA_URL: " " }).computer, undefined);
+    assert.equal(loadConfig({ ...base, TETHER_CUA_TOKEN: TOKEN }).computer, undefined);
   });
 
-  it("names the missing variable of a half-set daemon login and never echoes the token", () => {
-    assert.throws(() => loadConfig({ ...base, TETHER_CUA_URL: "http://127.0.0.1:7777" }), /incomplete environment: TETHER_CUA_TOKEN/);
-    assert.throws(() => loadConfig({ ...base, TETHER_CUA_TOKEN: TOKEN }), (error: Error) => {
-      assert.match(error.message, /TETHER_CUA_URL/);
-      assert.doesNotMatch(error.message, new RegExp(TOKEN));
-      return true;
-    });
+  it("works with a socket path and no token", () => {
+    const computer = loadConfig({ ...base, TETHER_CUA_URL: "/run/cua-agents/cua.sock" }).computer;
+    assert.equal(computer?.url, "/run/cua-agents/cua.sock");
+    assert.equal(computer?.token, "");
   });
 
-  it("accepts only a loopback daemon URL, so the token never leaves the host", () => {
-    for (const url of ["http://127.0.0.1:7777", "http://localhost:7777", "http://[::1]:7777"]) {
+  it("accepts a socket path or a loopback URL only, and never echoes the token", () => {
+    for (const url of ["http://127.0.0.1:7777", "http://localhost:7777", "http://[::1]:7777", "/run/cua.sock"]) {
       assert.equal(loadConfig({ ...cua, TETHER_CUA_URL: url }).computer?.url, url);
     }
-    for (const url of ["http://example.com:7777", "http://10.0.0.5:7777", "ftp://127.0.0.1", "not a url", "/run/cua.sock"]) {
+    for (const url of ["http://example.com:7777", "http://10.0.0.5:7777", "ftp://127.0.0.1", "not a url", "run/cua.sock"]) {
       assert.throws(
         () => loadConfig({ ...cua, TETHER_CUA_URL: url }),
-        (error: Error) => /TETHER_CUA_URL must be an http\(s\) loopback URL/.test(error.message) && !error.message.includes(TOKEN),
+        (error: Error) => /TETHER_CUA_URL must be an absolute socket path or an http\(s\) loopback URL/.test(error.message) && !error.message.includes(TOKEN),
         url,
       );
     }
+  });
+
+  it("calls connect with the token when there is one and with the URL alone when there is not", async () => {
+    const seen: unknown[][] = [];
+    const connect = (...address: unknown[]) => {
+      seen.push(address);
+      return { spaces: () => new FakeSpaces() };
+    };
+    for (const config of [CONFIG, { ...CONFIG, url: "/run/cua.sock", token: "" }]) {
+      await createComputer(config, () => undefined, { connect: connect as never }).tools.find((tool) => tool.name === "mac_status")!.execute({} as never, undefined as never, undefined as never);
+    }
+    assert.deepEqual(seen, [[CONFIG.url, TOKEN], ["/run/cua.sock"]]);
   });
 
   it("defaults the Space name to tether, two job slots and four host slots", () => {
@@ -293,6 +303,17 @@ describe("startup", () => {
     await build(fake).computer.startup();
     assert.deepEqual(fake.calls.filter((entry) => entry.startsWith("delete")), ["delete j1", "delete j2"]);
     assert.deepEqual(fake.entries.map((entry) => entry.name), others);
+  });
+
+  it("leaves error text alone when there is no token", async () => {
+    const fake = new FakeSpaces();
+    fake.list = async () => {
+      throw new Error("daemon down");
+    };
+    const lines: string[] = [];
+    const computer = createComputer({ ...CONFIG, token: "" }, (event, fields) => void lines.push(JSON.stringify({ event, ...fields })), { spaces: async () => fake });
+    await computer.startup();
+    assert.ok(lines.every((line) => line.includes("Error: daemon down")));
   });
 
   it("never puts the token in a log line", async () => {

@@ -239,8 +239,8 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 | `TETHER_TIMEZONE` | no | IANA zone for reminder times, default `Asia/Kolkata` |
 | `TETHER_LLM_BASE_URL` | no | router base URL, default `http://127.0.0.1:4000`; `/v1` is appended unless the path already ends in it |
 | `TETHER_STATE_DIR` | no | state directory; falls back to `STATE_DIRECTORY`, which systemd sets to `/var/lib/tether` |
-| `TETHER_CUA_URL` | no | loopback URL of the server's Cua daemon, `http(s)://127.0.0.1:<port>`; any other host is refused. Needs `TETHER_CUA_TOKEN` too; with neither set, no computer tool exists |
-| `TETHER_CUA_TOKEN` | no | the daemon's token. Never logged |
+| `TETHER_CUA_URL` | no | how to reach the server's Cua daemon: an absolute unix socket path such as `/run/cua-agents/cua.sock`, or an `http(s)://127.0.0.1:<port>` loopback URL (any other host is refused). It alone decides: unset, and no computer tool exists |
+| `TETHER_CUA_TOKEN` | no | the daemon's token, only for a loopback URL; a socket needs none. Never logged |
 | `TETHER_CUA_HOST` | no | Cua host provider for new Spaces, for example `host:netcup`; empty uses the daemon's default location |
 | `TETHER_CUA_MAC` | no | Cua relay ref of Nish's Mac, `relay:<machine-id>`; empty turns the Mac tools off |
 | `TETHER_CUA_SPACE` | no | name of its own Space, default `tether`; must not start with `tether-job-` |
@@ -365,9 +365,10 @@ and memory notes are still there, and that STOP survives the kill.
 
 Tether has its own Cua Linux Space, throwaway job Spaces, and tools for Nish's
 Mac (`Nishfleet/tether#7`). All of it is Pi Durable tools in `src/computer.ts`
-calling the `@trycua/cua` SDK in this process through `connect(url, token)`: the
-server's Cua daemon, reached on loopback with a fixed token, the same agent login
-every agent on the server uses. No MCP bridge, no `cua` CLI, no agent harness.
+calling the `@trycua/cua` SDK in this process through `connect(url)` or
+`connect(url, token)`: the server's Cua daemon, reached over a shared unix
+socket (or loopback with a token), the same agent login every agent on the
+server uses. No MCP bridge, no `cua` CLI, no agent harness.
 Every agent gets its own Space, so the logs show who did what: Tether's is
 `tether` and its jobs are `tether-job-<id>`.
 
@@ -391,14 +392,14 @@ Every agent gets its own Space, so the logs show who did what: Tether's is
   call tries again. Pi Durable 1.4.0 has no extension start hook, so `run` in
   `src/main.ts` calls it.
 
-Setup: `fleet-ops` gives the daemon a fixed loopback port and token and puts
-`TETHER_CUA_URL` and `TETHER_CUA_TOKEN` in `/etc/tether/tether.env`. Tether needs
-no Cua login or device of its own. The Mac is reached as a relay computer
+Setup: `fleet-ops` puts `TETHER_CUA_URL` (the shared socket, or a loopback URL
+with `TETHER_CUA_TOKEN`) in `/etc/tether/tether.env`. Tether needs no Cua login
+or device of its own. The Mac is reached as a relay computer
 (`TETHER_CUA_MAC`); that access is gated by the Mac's sharing switch and the
 server's device enrollment, not a per-agent Touch ID grant, and the Mac's audit
 log shows Tether's actions under Nish's account name.
 
-Switch it off: unset `TETHER_CUA_URL` and `TETHER_CUA_TOKEN`, or remove the
+Switch it off: unset `TETHER_CUA_URL`, or remove the
 `createComputer` lines from `src/main.ts`. Delete it: remove `src/computer*`,
 its tests, the `@trycua/cua` dependency, and run `cua spaces delete tether`.
 
@@ -421,7 +422,7 @@ model's prompt. A rule that only the host can enforce says so.
 | Message text cannot break out of the osascript template | Yes | `appleScriptString` and `shellQuote` in `src/computer.ts` | `tests/computer.test.ts` "osascript escaping" (backslash, quote, newline, a hostile string, and a real `sh` round trip). The AppleScript itself is not run in CI. |
 | Job Spaces are capped, always deleted, and never take the server's last slots; leftovers are swept at start | Yes | `job_run` and `startup` in `src/computer.ts` | `tests/computer.test.ts` "refuses at the slot cap without creating anything", "refuses when the server's Spaces are all in use, whoever owns them, without creating anything", "deletes the Space even when the command throws", "never exceeds the cap when jobs start together" and "never exceeds the host limit when its own Space and a job are created together" |
 | The start sweep and its own Space never touch another agent's Space | Yes | `startup` and `ensureSpace` in `src/computer.ts` | `tests/computer.test.ts` "only ever deletes tether-job-* Spaces, never desk, another agent's Space or a near miss" and "refuses to create its own Space when every host slot is taken, and touches nobody else's" |
-| The daemon token goes only to a loopback URL and into no log | Yes | `loadComputerConfig` in `src/config.ts`; `describeError` in `src/computer.ts` | `tests/computer.test.ts` "accepts only a loopback daemon URL, so the token never leaves the host" and "never puts the token in a log line" |
+| The daemon is reached only over a socket path or loopback, and any token goes into no log | Yes | `loadComputerConfig` in `src/config.ts`; `describeError` in `src/computer.ts` | `tests/computer.test.ts` "accepts a socket path or a loopback URL only, and never echoes the token" and "never puts the token in a log line" |
 | An asleep Mac never crashes a tool or hides behind a guess | Yes | `mac` in `src/computer.ts` | `tests/computer.test.ts` "returns the friendly error when the relay says: ..." and "does not hide other errors" |
 | Revoking Mac access | No. `cua devices revoke` and the Mac's sharing switch enforce it | Cua | none in this repo |
 | Scoped keys: each credential is the narrowest the provider offers, in a root-owned env file | No. The provider's key scope and file permissions enforce it. The app reads only named variables and logs no secret | host config in `Nishfleet/fleet-ops` | `tests/unit.test.ts` "names every missing variable and never echoes a value"; `tests/crash.test.ts` "does not leak message text or handles into its logs". The scope itself has no test here. |

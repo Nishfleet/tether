@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { DEFAULT_TIME_ZONE, isTimeZone } from "./clock.ts";
 
 export type Env = Readonly<Record<string, string | undefined>>;
@@ -35,7 +36,6 @@ export const DEFAULT_JOB_SLOTS = 2;
 export const MAX_JOB_SLOTS = 4;
 export const DEFAULT_HOST_SLOTS = 4;
 export const MAX_HOST_SLOTS = 64;
-export const CUA_NAMES = ["TETHER_CUA_URL", "TETHER_CUA_TOKEN"] as const;
 
 function slots(env: Env, name: string, fallback: number, max: number): number {
   const text = env[name]?.trim();
@@ -45,25 +45,23 @@ function slots(env: Env, name: string, fallback: number, max: number): number {
   return parsed;
 }
 
-function loopbackUrl(value: string): string {
+function daemonAddress(value: string): string {
+  if (isAbsolute(value)) return value;
   try {
     const url = new URL(value);
     if ((url.protocol === "http:" || url.protocol === "https:") && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return value;
   } catch {}
-  throw new Error("invalid environment: TETHER_CUA_URL must be an http(s) loopback URL");
+  throw new Error("invalid environment: TETHER_CUA_URL must be an absolute socket path or an http(s) loopback URL");
 }
 
 export function loadComputerConfig(env: Env): ComputerConfig | undefined {
   const url = env.TETHER_CUA_URL?.trim() ?? "";
-  const token = env.TETHER_CUA_TOKEN?.trim() ?? "";
-  if (!url && !token) return undefined;
-  const missing = CUA_NAMES.filter((name) => !env[name]?.trim());
-  if (missing.length > 0) throw new Error(`incomplete environment: ${missing.join(", ")}`);
+  if (!url) return undefined;
   const spaceName = env.TETHER_CUA_SPACE?.trim() || DEFAULT_SPACE_NAME;
   if (spaceName.startsWith(JOB_PREFIX)) throw new Error(`invalid environment: TETHER_CUA_SPACE must not start with ${JOB_PREFIX}`);
   return {
-    url: loopbackUrl(url),
-    token,
+    url: daemonAddress(url),
+    token: env.TETHER_CUA_TOKEN?.trim() ?? "",
     spaceName,
     hostRef: env.TETHER_CUA_HOST?.trim() ?? "",
     macRef: env.TETHER_CUA_MAC?.trim() ?? "",
