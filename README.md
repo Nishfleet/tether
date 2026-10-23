@@ -324,8 +324,8 @@ Run as root on the host. Nothing is pasted into a chat; the secrets go only into
 the terminal and the file.
 
 ```sh
-node /opt/tether/current/dist/setup.js google
-node /opt/tether/current/dist/setup.js icloud
+node /opt/tether/current/dist/setup/cli.js google
+node /opt/tether/current/dist/setup/cli.js icloud
 systemctl restart tether-agent.service
 ```
 

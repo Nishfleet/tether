@@ -1,12 +1,12 @@
-import { DEFAULT_TIME_ZONE, isTimeZone } from "./clock.ts";
-import { connectGoogle } from "./setup/google.ts";
-import { connectIcloud } from "./setup/icloud.ts";
-import { DEFAULT_ENV_FILE } from "./setup/env-file.ts";
-import { terminalAsk } from "./setup/prompt.ts";
+import { DEFAULT_TIME_ZONE, isTimeZone } from "../clock.ts";
+import { connectGoogle } from "./google.ts";
+import { connectIcloud } from "./icloud.ts";
+import { DEFAULT_ENV_FILE } from "./env-file.ts";
+import { terminalAsk } from "./prompt.ts";
 
 const target = process.argv[2];
 if (target !== "google" && target !== "icloud") {
-  process.stderr.write("usage: node setup.js google|icloud\n");
+  process.stderr.write("usage: node setup/cli.js google|icloud\n");
   process.exit(2);
 }
 
