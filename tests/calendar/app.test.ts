@@ -42,7 +42,7 @@ describe("calendar in the running app", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  async function boot(): Promise<void> {
+  async function boot(connected = true): Promise<void> {
     const { models, ref } = createModelAccess({ baseUrl: model.url, apiKey: KEY });
     const calendar = openCalendar(
       loadCalendarConfig(
@@ -68,7 +68,7 @@ describe("calendar in the running app", () => {
       log: () => undefined,
       retryBaseMs: 5,
       settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 }, stream: { maxRetries: 0 } },
-      calendar: { ...calendar, now: () => new Date("2026-10-23T08:00:00Z") },
+      ...(connected ? { calendar: { ...calendar, now: () => new Date("2026-10-23T08:00:00Z") } } : {}),
     });
   }
 
@@ -93,6 +93,16 @@ describe("calendar in the running app", () => {
     assert.match(second, /\[icloud\] Sat, 24 Oct 2026 15:00-16:00 \| Dentist/);
     assert.deepEqual(google.badAuth, []);
     assert.deepEqual(dav.badAuth, []);
+  });
+
+  it("offers no calendar tool and says nothing about one when no account is connected", opts, async () => {
+    model.enqueue(say("Hi."));
+    await boot(false);
+    channel.push(inbound("m1", "hello"));
+    await channel.sentCount(1);
+    const first = model.requests[0];
+    assert.ok(!(first?.tools ?? []).some((tool) => /^(calendar|contacts)_/.test(tool.function.name)));
+    assert.doesNotMatch(JSON.stringify(first), /calendar_list|contacts_find|untrusted/);
   });
 
   it("creates an event in the account the model names", opts, async () => {
