@@ -8,7 +8,6 @@ export type ComputerConfig = {
   readonly token: string;
   readonly spaceName: string;
   readonly hostRef: string;
-  readonly macRef: string;
   readonly jobSlots: number;
   readonly hostSlots: number;
 };
@@ -64,7 +63,6 @@ export function loadComputerConfig(env: Env): ComputerConfig | undefined {
     token: env.TETHER_CUA_TOKEN?.trim() ?? "",
     spaceName,
     hostRef: env.TETHER_CUA_HOST?.trim() ?? "",
-    macRef: env.TETHER_CUA_MAC?.trim() ?? "",
     jobSlots: slots(env, "TETHER_CUA_JOB_SLOTS", DEFAULT_JOB_SLOTS, MAX_JOB_SLOTS),
     hostSlots: slots(env, "TETHER_CUA_HOST_SLOTS", DEFAULT_HOST_SLOTS, MAX_HOST_SLOTS),
   };

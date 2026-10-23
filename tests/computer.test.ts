@@ -1,27 +1,12 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { SpaceCreateOptions, SpaceInfo } from "@trycua/cua";
-import { askText } from "../src/approval.ts";
 import { startTether, type Tether } from "../src/app.ts";
-import {
-  appleScriptString,
-  type BashResult,
-  clampLimit,
-  createComputer,
-  MAC_ASLEEP,
-  messagesCommand,
-  messagesQuery,
-  sendCommand,
-  sendScript,
-  shellQuote,
-  type SpacePort,
-  type SpacesPort,
-} from "../src/computer.ts";
+import { type BashResult, createComputer, type SpacePort, type SpacesPort } from "../src/computer.ts";
 import { type ComputerConfig, JOB_PREFIX, loadConfig } from "../src/config.ts";
 import { createModelAccess } from "../src/model.ts";
 import { ALLOWED, FakeChannel, FakeModel, KEY, SPACE, call, inbound, say } from "./helpers.ts";
@@ -30,7 +15,7 @@ const opts = { timeout: 30000 };
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const TOKEN = "secret-token-value";
-const CONFIG: ComputerConfig = { url: "http://127.0.0.1:7777", token: TOKEN, spaceName: "tether", hostRef: "host:test", macRef: "relay:mac", jobSlots: 2, hostSlots: 4 };
+const CONFIG: ComputerConfig = { url: "http://127.0.0.1:7777", token: TOKEN, spaceName: "tether", hostRef: "host:test", jobSlots: 2, hostSlots: 4 };
 const OK: BashResult = { stdout: "hello\n", stderr: "", exitCode: 0, timedOut: false };
 
 const info = (name: string, id: string, powerState = "running", host = "test"): SpaceInfo => ({ id, name, powerState, host, hostName: host }) as SpaceInfo;
@@ -38,7 +23,6 @@ const info = (name: string, id: string, powerState = "running", host = "test"): 
 class FakeSpace implements SpacePort {
   readonly commands: string[] = [];
   readonly written: [string, string][] = [];
-  readonly actions: string[] = [];
   result: BashResult = OK;
   failWith: Error | undefined;
   files: Record<string, string> = {};
@@ -57,13 +41,6 @@ class FakeSpace implements SpacePort {
     writeFileSync(join(destDir, remotePath.split("/").pop() as string), body);
     return { dest: destDir };
   };
-  screenshot = async (_options: undefined) => ({ image: new Uint8Array([1, 2, 3]).buffer, format: 0 });
-  spacesd = () => ({
-    click: async (x: number, y: number) => void this.actions.push(`click ${x} ${y}`),
-    typeText: async (value: string) => void this.actions.push(`type ${value}`),
-    press: async (key: string) => void this.actions.push(`press ${key}`),
-    hotkey: async (keys: string[]) => void this.actions.push(`hotkey ${keys.join("+")}`),
-  });
 }
 
 class FakeSpaces implements SpacesPort {
@@ -71,7 +48,6 @@ class FakeSpaces implements SpacesPort {
   readonly spaces = new Map<string, FakeSpace>();
   readonly calls: string[] = [];
   readonly created: SpaceCreateOptions[] = [];
-  failMac: Error | undefined;
   next = 0;
 
   list = async () => {
@@ -86,7 +62,6 @@ class FakeSpaces implements SpacesPort {
     return { space: made };
   };
   space = async (ref: string) => {
-    if (ref === CONFIG.macRef && this.failMac) throw this.failMac;
     const found = this.spaces.get(ref) ?? new FakeSpace();
     this.spaces.set(ref, found);
     return found;
@@ -100,7 +75,6 @@ class FakeSpaces implements SpacesPort {
     this.calls.push(`delete ${ref}`);
     this.entries = this.entries.filter((candidate) => candidate.id !== ref);
   };
-  mac = () => this.spaces.get(CONFIG.macRef) as FakeSpace;
 }
 
 function build(fake: FakeSpaces, config: ComputerConfig = CONFIG, ids: string[] = ["a1", "b2", "c3", "d4"]) {
@@ -117,26 +91,20 @@ function build(fake: FakeSpaces, config: ComputerConfig = CONFIG, ids: string[] 
 const textOf = (result: { output?: { text?: string }[] }) => result.output?.[0]?.text ?? "";
 
 describe("computer extension tools", () => {
-  it("asks first for exactly mac_send_message and mac_act", () => {
+  it("offers exactly four tools, none of which asks first, so a new tool forces a decision", () => {
     const { computer } = build(new FakeSpaces());
-    const asking = computer.tools.filter((tool) => tool.askFirst !== undefined).map((tool) => tool.name);
-    assert.deepEqual(asking.sort(), ["mac_act", "mac_send_message"]);
-    assert.deepEqual(
-      computer.tools.map((tool) => tool.name).sort(),
-      ["computer_read", "computer_run", "computer_write", "job_run", "mac_act", "mac_read_messages", "mac_screenshot", "mac_send_message", "mac_status"],
-    );
+    assert.deepEqual(computer.tools.map((tool) => tool.name).sort(), ["computer_read", "computer_run", "computer_write", "job_run"]);
+    assert.deepEqual(computer.tools.filter((tool) => tool.askFirst !== undefined || tool.money !== undefined).map((tool) => tool.name), []);
   });
 
-  it("replays only pure reads", () => {
+  it("replays only the pure read", () => {
     const { computer } = build(new FakeSpaces());
-    const safe = computer.tools.filter((tool) => tool.replay === "safe").map((tool) => tool.name);
-    assert.deepEqual(safe.sort(), ["computer_read", "mac_read_messages", "mac_screenshot", "mac_status"]);
+    assert.deepEqual(computer.tools.filter((tool) => tool.replay === "safe").map((tool) => tool.name), ["computer_read"]);
   });
 
-  it("offers only the Linux tools without a Mac and only the Mac tools with one", () => {
-    const linux = build(new FakeSpaces(), { ...CONFIG, macRef: "" }).computer.tools.map((tool) => tool.name);
-    assert.deepEqual(linux.sort(), ["computer_read", "computer_run", "computer_write", "job_run"]);
-    assert.ok(build(new FakeSpaces()).computer.tools.some((tool) => tool.name === "mac_status"));
+  it("has no Mac tool and no tool that names a Mac", () => {
+    const { computer } = build(new FakeSpaces());
+    assert.ok(computer.tools.every((tool) => !/\bmac\b|imessage/i.test(`${tool.name} ${tool.description}`)));
   });
 });
 
@@ -176,7 +144,7 @@ describe("computer config", () => {
       return { spaces: () => new FakeSpaces() };
     };
     for (const config of [CONFIG, { ...CONFIG, url: "/run/cua.sock", token: "" }]) {
-      await createComputer(config, () => undefined, { connect: connect as never }).tools.find((tool) => tool.name === "mac_status")!.execute({} as never, undefined as never, undefined as never);
+      await createComputer(config, () => undefined, { connect: connect as never }).tools.find((tool) => tool.name === "computer_run")!.execute({ command: "true" } as never, undefined as never, undefined as never);
     }
     assert.deepEqual(seen, [[CONFIG.url, TOKEN], ["/run/cua.sock"]]);
   });
@@ -187,15 +155,14 @@ describe("computer config", () => {
       token: TOKEN,
       spaceName: "tether",
       hostRef: "",
-      macRef: "",
       jobSlots: 2,
       hostSlots: 4,
     });
   });
 
   it("takes every setting from the environment and rejects bad numbers and a job-like Space name", () => {
-    const env = { ...cua, TETHER_CUA_HOST: "h", TETHER_CUA_MAC: "relay:m", TETHER_CUA_SPACE: "box", TETHER_CUA_JOB_SLOTS: "1", TETHER_CUA_HOST_SLOTS: "6" };
-    assert.deepEqual(loadConfig(env).computer, { url: "http://127.0.0.1:7777", token: TOKEN, spaceName: "box", hostRef: "h", macRef: "relay:m", jobSlots: 1, hostSlots: 6 });
+    const env = { ...cua, TETHER_CUA_HOST: "h", TETHER_CUA_SPACE: "box", TETHER_CUA_JOB_SLOTS: "1", TETHER_CUA_HOST_SLOTS: "6" };
+    assert.deepEqual(loadConfig(env).computer, { url: "http://127.0.0.1:7777", token: TOKEN, spaceName: "box", hostRef: "h", jobSlots: 1, hostSlots: 6 });
     assert.throws(() => loadConfig({ ...env, TETHER_CUA_JOB_SLOTS: "9" }), /TETHER_CUA_JOB_SLOTS/);
     assert.throws(() => loadConfig({ ...env, TETHER_CUA_JOB_SLOTS: "x" }), /TETHER_CUA_JOB_SLOTS/);
     assert.throws(() => loadConfig({ ...env, TETHER_CUA_HOST_SLOTS: "-1" }), /TETHER_CUA_HOST_SLOTS/);
@@ -233,6 +200,17 @@ describe("ensure Space", () => {
     fake.entries = [info("a", "1"), info("b", "2"), info("c", "3"), info("d", "4", "running", "elsewhere")];
     await build(fake).tool("computer_run")({ command: "x" });
     assert.ok(fake.calls.includes("create tether"));
+  });
+
+  it("creates every Space with an empty environment and sends the token nowhere", async () => {
+    const fake = new FakeSpaces();
+    const { tool } = build(fake);
+    await tool("computer_run")({ command: "echo hi" });
+    await tool("job_run")({ command: "echo hi" });
+    assert.equal(fake.created.length, 2);
+    assert.ok(fake.created.every((options) => options.env.size === 0 && options.command === undefined && options.services.size === 0));
+    const everything = JSON.stringify([fake.created, [...fake.spaces.values()].map((space) => space.commands)], (_key, value) => (value instanceof Map ? [...value] : value));
+    assert.equal(everything.includes(TOKEN), false);
   });
 
   it("starts a stopped Space", async () => {
@@ -436,158 +414,7 @@ describe("job_run", () => {
   });
 });
 
-describe("Mac tools", () => {
-  it("reports an asleep Mac as a plain status, never an error", async () => {
-    const fake = new FakeSpaces();
-    fake.failMac = new Error("machine stopped sharing");
-    const result = await build(fake).tool("mac_status")({});
-    assert.equal(result.isError, undefined);
-    assert.equal(textOf(result), `${MAC_ASLEEP}.`);
-  });
-
-  it("reports an awake Mac", async () => {
-    assert.equal(textOf(await build(new FakeSpaces()).tool("mac_status")({})), "Nish's Mac is awake and sharing.");
-  });
-
-  for (const reason of ["relay: stopped sharing", "host unreachable", "unauthenticated", "request timed out"]) {
-    it(`returns the friendly error when the relay says: ${reason}`, async () => {
-      const fake = new FakeSpaces();
-      fake.failMac = new Error(reason);
-      const { tool } = build(fake);
-      for (const [name, args] of [
-        ["mac_read_messages", {}],
-        ["mac_send_message", { to: "a@b.c", text: "hi" }],
-        ["mac_screenshot", {}],
-        ["mac_act", { action: "click", x: 1, y: 2 }],
-      ] as const) {
-        const result = await tool(name)(args);
-        assert.equal(result.isError, true, name);
-        assert.equal(textOf(result), MAC_ASLEEP, name);
-      }
-    });
-  }
-
-  it("treats an asleep Mac that fails mid-call the same way", async () => {
-    const fake = new FakeSpaces();
-    const { tool } = build(fake);
-    await tool("mac_status")({});
-    fake.mac().failWith = new Error("connection lost");
-    assert.equal(textOf(await tool("mac_read_messages")({})), MAC_ASLEEP);
-  });
-
-  it("does not hide other errors", async () => {
-    const fake = new FakeSpaces();
-    fake.failMac = new Error("disk full");
-    await assert.rejects(build(fake).tool("mac_read_messages")({}), /disk full/);
-  });
-
-  it("returns the messages the fixed query printed", async () => {
-    const fake = new FakeSpaces();
-    const { tool } = build(fake);
-    await tool("mac_status")({});
-    fake.mac().result = { stdout: '[{"text":"yo"}]\n', stderr: "", exitCode: 0, timedOut: false };
-    assert.equal(textOf(await tool("mac_read_messages")({ limit: 3 })), '[{"text":"yo"}]');
-    assert.equal(fake.mac().commands.at(-1), messagesCommand(3));
-  });
-
-  it("surfaces a failed read, such as missing Full Disk Access", async () => {
-    const fake = new FakeSpaces();
-    const { tool } = build(fake);
-    await tool("mac_status")({});
-    fake.mac().result = { stdout: "", stderr: "unable to open database", exitCode: 1, timedOut: false };
-    const result = await tool("mac_read_messages")({});
-    assert.equal(result.isError, true);
-    assert.match(textOf(result), /unable to open database/);
-  });
-
-  it("sends through the fixed osascript template", async () => {
-    const fake = new FakeSpaces();
-    const { tool } = build(fake);
-    assert.equal(textOf(await tool("mac_send_message")({ to: "a@b.c", text: "hi" })), "Sent to a@b.c.");
-    assert.equal(fake.mac().commands[0], sendCommand("a@b.c", "hi"));
-  });
-
-  it("returns the screenshot as an image", async () => {
-    const result = await build(new FakeSpaces()).tool("mac_screenshot")({});
-    assert.deepEqual(result.output, [{ type: "image", data: "AQID", mimeType: "image/png" }]);
-  });
-
-  it("does one action per call and rejects a missing field", async () => {
-    const fake = new FakeSpaces();
-    const { tool } = build(fake);
-    assert.equal(textOf(await tool("mac_act")({ action: "click", x: 3, y: 4 })), "Done: click.");
-    await tool("mac_act")({ action: "type", text: "abc" });
-    await tool("mac_act")({ action: "key", key: "Return" });
-    await tool("mac_act")({ action: "key", key: "cmd+c" });
-    assert.deepEqual(fake.mac().actions, ["click 3 4", "type abc", "press Return", "hotkey cmd+c"]);
-    assert.equal(textOf(await tool("mac_act")({ action: "run", command: "ls" })), "exit code 0\nstdout:\nhello\n");
-    const bad = await tool("mac_act")({ action: "click", x: 1 });
-    assert.equal(bad.isError, true);
-    assert.equal(textOf(bad), "mac_act click needs x and y.");
-    assert.equal(fake.mac().actions.length, 4);
-  });
-});
-
-describe("osascript escaping", () => {
-  it("escapes backslashes, quotes and newlines", () => {
-    assert.equal(appleScriptString('say "hi"'), '"say \\"hi\\""');
-    assert.equal(appleScriptString("a\\b"), '"a\\\\b"');
-    assert.equal(appleScriptString("a\nb\r\nc"), '"a\\nb\\r\\nc"');
-    assert.equal(appleScriptString('\\"'), '"\\\\\\""');
-  });
-
-  it("keeps hostile text inside the string literal of the template", () => {
-    const hostile = '" & (do shell script "rm -rf /") & "';
-    const lines = sendScript("a@b.c", hostile);
-    assert.equal(lines.length, 5);
-    assert.equal(lines[3], `send "\\" & (do shell script \\"rm -rf /\\") & \\"" to targetBuddy`);
-    assert.equal(lines[2], 'set targetBuddy to buddy "a@b.c" of targetService');
-  });
-
-  it("escapes the recipient too", () => {
-    assert.equal(sendScript('x"y', "t")[2], 'set targetBuddy to buddy "x\\"y" of targetService');
-  });
-
-  it("survives the shell: every -e argument reaches osascript unchanged", () => {
-    const text = `it's "quoted" \\ back\nnew $(touch /tmp/never) \`id\``;
-    const command = sendCommand("a'b@c.d", text).replace(/^osascript/, 'printf "%s\\n"');
-    const printed = execFileSync("sh", ["-c", command], { encoding: "utf8" }).split("\n");
-    const expected = sendScript("a'b@c.d", text).flatMap((line) => ["-e", line]);
-    assert.deepEqual(printed.slice(0, expected.length), expected);
-  });
-
-  it("quotes single quotes for the shell", () => {
-    assert.equal(shellQuote("a'b"), `'a'\\''b'`);
-    assert.equal(execFileSync("sh", ["-c", `printf %s ${shellQuote("a'b $x")}`], { encoding: "utf8" }), "a'b $x");
-  });
-});
-
-describe("mac_read_messages query", () => {
-  it("is one fixed read-only statement against chat.db", () => {
-    const command = messagesCommand(10);
-    assert.match(command, /^sqlite3 -readonly -json "\$HOME\/Library\/Messages\/chat\.db" '/);
-    assert.match(messagesQuery(10), /^SELECT datetime\(message\.date \/ 1000000000 \+ 978307200, 'unixepoch'\) AS date, handle\.id AS sender, message\.is_from_me AS is_from_me, message\.text AS text FROM message LEFT JOIN handle ON message\.handle_id = handle\.ROWID ORDER BY message\.date DESC LIMIT 10;$/);
-  });
-
-  it("clamps the limit to 1-50 with a default of 10, whatever the caller sends", () => {
-    assert.equal(clampLimit(undefined), 10);
-    assert.equal(clampLimit(0), 1);
-    assert.equal(clampLimit(-5), 1);
-    assert.equal(clampLimit(99), 50);
-    assert.equal(clampLimit(7.9), 7);
-    assert.equal(clampLimit(Number.NaN), 10);
-    assert.match(messagesQuery(1e9), /LIMIT 50;$/);
-    assert.match(messagesQuery(undefined), /LIMIT 10;$/);
-  });
-
-  it("has no way to carry caller text into the command", () => {
-    const strip = (limit: number | undefined) => messagesCommand(limit).replace(/LIMIT \d+/, "LIMIT n");
-    assert.equal(strip(5), strip(undefined));
-    assert.equal(strip(5), strip(Number.NaN));
-  });
-});
-
-describe("ask-first through the real hook", () => {
+describe("computer tools through the real hook", () => {
   let dir: string;
   let model: FakeModel;
   let channel: FakeChannel;
@@ -607,10 +434,10 @@ describe("ask-first through the real hook", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("does not send an iMessage until Nish says YES, but runs a plain computer call at once", opts, async () => {
+  it("runs a computer command and a job at once, with no question to Nish", opts, async () => {
     const fake = new FakeSpaces();
     const { computer } = build(fake);
-    model.enqueue(call("computer_run", { command: "date" }), call("mac_send_message", { to: "bob@example.test", text: "hi" }), say("All done."));
+    model.enqueue(call("computer_run", { command: "date" }), call("job_run", { command: "echo hi" }), say("All done."));
     const { models, ref } = createModelAccess({ baseUrl: model.url, apiKey: KEY });
     tether = await startTether({
       channel,
@@ -624,15 +451,11 @@ describe("ask-first through the real hook", () => {
       settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 }, stream: { maxRetries: 0 } },
       tools: computer.tools,
     });
-    channel.push(inbound("m1", "check the date then message bob"));
+    channel.push(inbound("m1", "check the date then run a job"));
     await channel.sentCount(1);
-    assert.equal(channel.sent[0]?.text, askText('Run mac_send_message with {"to":"bob@example.test","text":"hi"}.'));
-    await pause(200);
-    assert.equal(fake.spaces.get("id-1")!.commands.length, 1, "computer_run ran without asking");
-    assert.equal(fake.spaces.has(CONFIG.macRef), false, "the Mac was not touched");
-    channel.push(inbound("m2", "YES"));
-    await channel.sentCount(2);
-    assert.equal(fake.mac().commands.length, 1);
-    assert.equal(fake.mac().commands[0], sendCommand("bob@example.test", "hi"));
+    assert.deepEqual(channel.sent.map((entry) => entry.text), ["All done."]);
+    assert.equal(fake.spaces.get("id-1")!.commands.length, 1);
+    assert.equal(fake.spaces.get("id-2")!.commands.length, 1);
+    assert.equal(fake.entries.some((entry) => entry.name.startsWith(JOB_PREFIX)), false, "the job Space was deleted");
   });
 });

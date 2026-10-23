@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { isoInZone, humanInZone, isTimeZone } from "../src/clock.ts";
 import { loadConfig } from "../src/config.ts";
 import { classify } from "../src/control.ts";
-import { cleanLabel, describeAge, isLocationAttachment, LABEL_CHARS, parseLocation } from "../src/location.ts";
+import { cleanLabel, describeAge, isLocationAttachment, isMapsLinkOnly, LABEL_CHARS, linkAttachment, mapsLinks, parseLocation } from "../src/location.ts";
 import { boundingBox, formatDistance, haversineMeters, PLACES_URL } from "../src/places.ts";
 import { parseInstant } from "../src/reminders.ts";
 import { ALLOWED, inbound } from "./helpers.ts";
@@ -74,6 +74,39 @@ describe("location attachments and classify", () => {
     assert.deepEqual(classify(inbound("1", undefined, { attachments, direct: false }), ALLOWED), { kind: "ignore", reason: "not_direct" });
     assert.deepEqual(classify(inbound("1", undefined, { attachments: [file("photo.jpg", "image/jpeg")] }), ALLOWED), { kind: "ignore", reason: "not_text" });
     assert.equal(classify(inbound("1", "STOP", { attachments }), ALLOWED).kind, "stop");
+  });
+});
+
+describe("maps links from rich messages", () => {
+  it("finds only map links in any source", () => {
+    const links = mapsLinks("see https://maps.apple.com/?ll=12.9689,77.5842&q=Pin and https://example.test/a", undefined, "https://www.google.com/maps/@51.5,-0.12,15z", "https://www.google.com/search?q=x");
+    assert.deepEqual(links, ["https://maps.apple.com/?ll=12.9689,77.5842&q=Pin", "https://www.google.com/maps/@51.5,-0.12,15z"]);
+  });
+
+  it("builds a shared-location file only when a link holds coordinates", async () => {
+    const found = linkAttachment(undefined, "https://maps.apple.com/?ll=12.9689,77.5842&q=Dropped%20pin");
+    assert.ok(found && isLocationAttachment(found));
+    assert.deepEqual(parseLocation((await found.read()).toString("utf8")), { latitude: 12.9689, longitude: 77.5842, label: "Dropped pin" });
+    assert.equal(linkAttachment("https://maps.app.goo.gl/abc123"), undefined);
+    assert.equal(linkAttachment("no links here"), undefined);
+  });
+
+  it("refuses lookalike hosts, ignores non-text sources, and reads a Google maps link", async () => {
+    assert.deepEqual(mapsLinks("https://maps.google.evil.test/?ll=37.7,-122.4", "https://google.evil.test/maps?ll=1,2", "https://maps.apple.com.evil.test/?ll=1,2"), []);
+    assert.deepEqual(mapsLinks("https://maps.google.co.uk/?q=51.5,-0.12", "https://www.google.de/maps/@52.5,13.4,15z"), ["https://maps.google.co.uk/?q=51.5,-0.12", "https://www.google.de/maps/@52.5,13.4,15z"]);
+    assert.deepEqual(mapsLinks({ href: "https://maps.apple.com/?ll=1,2" } as never, 42 as never, null as never), []);
+    const found = linkAttachment("https://www.google.com/maps/@51.5,-0.12,15z");
+    assert.deepEqual(parseLocation((await found?.read())?.toString("utf8") ?? ""), { latitude: 51.5, longitude: -0.12, label: null });
+  });
+
+  it("treats a message that is only a map link as a location, and a sentence with a link as chat", () => {
+    const link = "https://maps.apple.com/?ll=12.9689,77.5842";
+    const attachments = [linkAttachment(link)].filter((entry) => entry !== undefined);
+    assert.ok(isMapsLinkOnly(` ${link} `));
+    assert.ok(!isMapsLinkOnly(`meet me at ${link}`));
+    assert.equal(classify(inbound("1", link, { attachments }), ALLOWED).kind, "location");
+    assert.equal(classify(inbound("1", `meet me at ${link}`, { attachments }), ALLOWED).kind, "chat");
+    assert.deepEqual(classify(inbound("1", undefined, { attachments, sender: "stranger@example.test" }), ALLOWED), { kind: "ignore", reason: "sender_not_allowed" });
   });
 });
 
