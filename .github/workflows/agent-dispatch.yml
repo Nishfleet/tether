@@ -1,6 +1,4 @@
-# Trigger stub. The dispatch logic lives once in Nishfleet/fleet-ops; a
-# workflow only fires on its own repo's events, so the triggers stay here.
-# opus-vet dispatches this file by name with issue=<N>.
+# Trigger stub (a workflow fires only on its own repo's events); the dispatch logic lives in Nishfleet/fleet-ops. opus-vet dispatches this file by name with issue=<N>.
 name: agent-dispatch
 on:
   issues:
@@ -36,6 +34,8 @@ concurrency:
     ${{ (github.event_name == 'pull_request_target' && github.event.action != 'closed') && format('agent-dispatch-pr-{0}-{1}-{2}', github.repository, github.event.pull_request.number, github.event.action) ||
     format('agent-dispatch-stub-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' }}
+permissions:
+  contents: read
 jobs:
   dispatch:
     # Every pull_request_target action but closed (the callee's hold-risky,
