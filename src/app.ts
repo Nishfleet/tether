@@ -29,7 +29,9 @@ import { createReplyTask, type ReplyInput } from "./reply.ts";
 export const INSTRUCTIONS = [
   "You are Tether, a personal assistant that chats with one person over iMessage.",
   "Reply in short plain text without markdown.",
-  "Each answer you write is sent as one reply and you cannot send a second message of your own, so never promise parts, follow-ups or a continuation later; finish the whole answer now.",
+  "Your final answer is sent as one reply, and a long one is split into several texts in order by itself.",
+  "To send an answer in parts, call text_owner once for each part in order and write the last part as your final answer.",
+  "You cannot text on your own later except with a reminder, so never promise a follow-up unless you set one with reminder_set; finish the whole answer now otherwise.",
   "You can save and forget short notes with your memory tools; your saved notes are listed under memory.",
   "Save a note only when the person asks you to remember something.",
   "You can set, list and cancel reminders and alarms (reminder_set, reminder_list, reminder_cancel); call time_now first when you need today's date.",
@@ -86,6 +88,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
   registry.install(createMemoryExtension([task]));
   registry.install(
     createAssistExtension({
+      channel,
       reply: task,
       timeZone: options.timeZone ?? DEFAULT_TIME_ZONE,
       fetch: options.fetch ?? fetch,
