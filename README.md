@@ -167,8 +167,19 @@ Every other attachment is still ignored. A vCard with no coordinates is logged
 as `attachment_unparsed` with its file name, MIME type and size, never its
 content, and the coordinates themselves are never logged.
 
-The exact vCard of a real iPhone pin is checked live after each change to this
-path. See `tests/location.test.ts` for the shapes the parser accepts.
+**What a real pin looked like (live, 2026-10-23).** The first real "Send Pin" from
+an iPhone did not arrive as a `.loc.vcf` file. Spectrum delivered it as an
+`unsupported-message` with no text and no attachment, so v0.5.2 ignored it. From
+0.5.3 the app also reads a map link (`maps.apple.com`, `maps.google.*`,
+`google.*/maps`, `maps.app.goo.gl`) found in the message text, the rich-link URL
+(`miniApp.url`), `nativeText` or `subject`, and treats it like a pin when the link
+holds coordinates. A message that is only a map link counts as a location, a
+sentence that contains one is still chat. A short `maps.app.goo.gl` link has no
+coordinates and cannot be expanded (the app makes no other web call), so it is
+not saved. For every non-text message the app logs which fields were present
+(names, lengths and flags, never content) as `inbound_content`, so the next real
+pin shows what Spectrum gave us. See `tests/location.test.ts` for the shapes the
+parser accepts.
 
 ## Nearby places
 
