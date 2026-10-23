@@ -58,10 +58,10 @@ without the model. Text `RESUME` to continue.
   file and are listed in the system prompt of every request, so they survive
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
-  `reminder_list`, `reminder_cancel`, `location_request`, `location_last` and
-  `places_nearby`, plus the calendar and contacts tools when an account is connected (see
-  Calendar and contacts) and its own computer when configured (see Its own
-  computer). Nothing else. Any tool that can act for Nish carries
+  `reminder_list`, `reminder_cancel`, `location_request`, `location_last`,
+  `places_nearby` and `text_owner`, plus the calendar and contacts tools when an
+  account is connected (see Calendar and contacts) and its own computer when
+  configured (see Its own computer). Nothing else. Any tool that can act for Nish carries
   `askFirst`; see Safety rules.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
@@ -136,8 +136,11 @@ An alarm is a reminder: Tether can only text. It cannot ring the phone, and it
 does not repeat.
 
 **STOP holds reminders.** A reminder that is due while Tether is stopped is not
-sent. Its task re-checks once a minute (a durable sleep again) and the text goes
-out after `RESUME`.
+sent. At the due time the task checks the stopped state in the same commit that
+would send the text. If Tether is stopped, it marks the reminder held and ends,
+with no loop and no timer. The `RESUME` commit sends every held reminder, so a
+reminder is either sent before `STOP` took effect or held for `RESUME`, never
+lost.
 
 **Apple Reminders.** There is no sync with the iPhone Reminders app and none is
 promised. iCloud Reminders that were upgraded to the current format are, as far
@@ -192,7 +195,7 @@ system prompt tells the model to treat it as data.
 | Only a vCard or location file under 64 KB is read | yes, `isLocationAttachment` | `tests/location.test.ts` |
 | The lookup calls one fixed https host, with no redirects | yes, `PLACES_URL`, `redirect: "error"` | `tests/assist.test.ts`, `tests/location.test.ts` |
 | Reminders text only the owner's chat | yes, the space is saved from accepted messages only | `tests/assist.test.ts` |
-| STOP holds due reminders until RESUME | yes, `tether.reminder` checks the state | `tests/assist.test.ts` |
+| STOP holds due reminders until RESUME | yes, `tether.reminder` checks the state in its sending commit and `RESUME` releases them | `tests/assist.test.ts`, `tests/reminder-crash.test.ts` |
 | A reminder survives a kill and is sent once | yes, durable sleep | `tests/reminder-crash.test.ts` |
 | Place names are data, not instructions | instruction only (system prompt); the tool cannot act, only read | none |
 
@@ -204,8 +207,17 @@ than 3500 characters is split at paragraph, line, sentence or word boundaries
 (or cut hard where a stretch has none) and sent as several texts in order. Delivery is at least once per part. Each part is its own durable checkpoint of
 the `tether.reply` task, so a retry or a restart continues with the next part.
 If the model still stops at its length limit, the last text ends with
-`(truncated: this reply hit my length limit)`. The system prompt tells the model
-that it sends one reply per message and must not promise parts or follow-ups.
+`(truncated: this reply hit my length limit)`.
+
+**Follow-up parts.** `text_owner` texts the owner one extra message right away
+(up to 3500 characters), so the model can send a long answer in parts: one
+`text_owner` call per part in order, then the last part as its final answer. The
+call waits for the channel to accept the text, so the parts keep their order.
+At most 20 extra texts in 10 minutes (a durable counter, `tether.outbox`), the
+text goes only to the owner's chat, and a failed send is reported to the model
+instead of retried. Unlike a reply, a `text_owner` is not retried after a crash.
+The model cannot text on its own later: the system prompt tells it to promise a
+follow-up only when it sets one with `reminder_set`.
 
 ## Crash-proofing
 
