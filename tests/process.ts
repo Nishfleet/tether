@@ -4,11 +4,12 @@ import { createInterface } from "node:readline";
 import type { Inbound } from "../src/channel.ts";
 import { KEY, ALLOWED } from "./helpers.ts";
 
-export type Line = { ready?: true; sent?: { space: string; text: string }; sending?: string };
+export type Line = { ready?: true; sent?: { space: string; text: string }; sending?: string; ran?: string };
 
 export class Tether {
   readonly sent: string[] = [];
   readonly sending: string[] = [];
+  readonly ran: string[] = [];
   readonly stderr: string[] = [];
   readonly exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   private readonly child: ChildProcess;
@@ -34,6 +35,7 @@ export class Tether {
       if (parsed.ready) markReady();
       if (parsed.sent) this.sent.push(parsed.sent.text);
       if (parsed.sending !== undefined) this.sending.push(parsed.sending);
+      if (parsed.ran !== undefined) this.ran.push(parsed.ran);
       for (const waiter of this.waiters.splice(0)) waiter();
     });
     createInterface({ input: this.child.stderr as NodeJS.ReadableStream }).on("line", (line) => {

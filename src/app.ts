@@ -3,6 +3,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
   createRegistry,
+  defineExtension,
   Harness,
   type Conversation,
   type HarnessSettings,
@@ -10,6 +11,7 @@ import {
   type Storage,
   type Tx,
 } from "@earendil-works/pi-durable";
+import { answer, cancelAll, createApprovalExtension, hasAsked, Wakeups, type AnyGuardedTool } from "./approval.ts";
 import { createAssistExtension } from "./assist.ts";
 import { createCalendarExtension, type CalendarOptions } from "./calendar/tools.ts";
 import type { Channel, Inbound, InboundAttachment } from "./channel.ts";
@@ -56,6 +58,8 @@ export type TetherOptions = {
   readonly fetch?: Fetch;
   readonly reminderRecheckMs?: number;
   readonly settings?: HarnessSettings;
+  readonly tools?: readonly AnyGuardedTool[];
+  readonly approvalTtlMs?: number;
   readonly calendar?: CalendarOptions;
 };
 
@@ -91,6 +95,16 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
     }),
   );
   if (options.calendar) registry.install(createCalendarExtension(options.calendar));
+  if (options.tools?.length) registry.install(defineExtension({ name: "tether-tools", tools: options.tools }));
+  const wakeups = new Wakeups();
+  let current: Conversation | undefined;
+  const getRoot = (): Conversation => {
+    if (!current) throw new Error("root conversation is not open yet");
+    return current;
+  };
+  const notify = (tx: Tx, space: string, text: string) => queue(tx, notice(space, text));
+  const lookup = (name: string) => registry.snapshot().tools().find((entry) => entry.tool.name === name)?.tool as AnyGuardedTool | undefined;
+  registry.install(createApprovalExtension({ root: getRoot, context, lookup, notify, wakeups, log, ...(options.approvalTtlMs === undefined ? {} : { ttlMs: options.approvalTtlMs }) }));
   const harness = await Harness.open(
     options.storage,
     {
@@ -103,6 +117,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
     context,
   );
   const root: Conversation = await harness.root(context, { agent: { model: options.model, instructions: INSTRUCTIONS } });
+  current = root;
   await root.configure({ model: options.model, instructions: INSTRUCTIONS }, context);
 
   const claim = (state: { seen: string[] }, id: string): boolean => {
@@ -164,6 +179,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
         return "already_stopped";
       }
       state.stopped = true;
+      await cancelAll(tx);
       state.held.push(...state.inflight.map((item) => ({ ...item })));
       state.inflight.splice(0, state.inflight.length);
       return "stopped";
@@ -173,6 +189,14 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
     await root.commit((tx) => queue(tx, notice(message.space, STOPPED_TEXT)), context);
     return outcome;
   };
+
+  const onAnswer = (message: Inbound, approve: boolean) =>
+    root.commit(async (tx) => {
+      if (!(await hasAsked(tx))) return "none";
+      const state = await tx.doc(StateDoc);
+      if (!claim(state, message.id)) return "duplicate";
+      return answer(tx, approve, notify, Date.now());
+    }, context);
 
   const onResume = (message: Inbound) =>
     root.commit(async (tx) => {
@@ -199,14 +223,15 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
       log("ignored", { id: message.id, reason: verdict.reason, from: fingerprint(salt, message.sender) });
       return;
     }
-    const outcome =
-      verdict.kind === "stop"
-        ? await onStop(message)
-        : verdict.kind === "resume"
-          ? await onResume(message)
-          : verdict.kind === "location"
-            ? await onLocation(message, verdict.attachment)
-            : await onChat(message, verdict.text);
+    let outcome: string;
+    if (verdict.kind === "stop") outcome = await onStop(message);
+    else if (verdict.kind === "resume") outcome = await onResume(message);
+    else if (verdict.kind === "location") outcome = await onLocation(message, verdict.attachment);
+    else if (verdict.kind === "yes" || verdict.kind === "no") {
+      outcome = await onAnswer(message, verdict.kind === "yes");
+      if (outcome === "none") outcome = await onChat(message, verdict.text);
+    } else outcome = await onChat(message, verdict.text);
+    wakeups.wake();
     log("handled", { id: message.id, kind: verdict.kind, outcome });
   };
 

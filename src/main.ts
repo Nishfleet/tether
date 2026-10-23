@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { startTether, type Tether } from "./app.ts";
+import type { AnyGuardedTool } from "./approval.ts";
 import { loadCalendarConfig } from "./calendar/config.ts";
 import { openCalendar } from "./calendar/index.ts";
 import type { Channel } from "./channel.ts";
@@ -16,7 +17,7 @@ export async function run(
   env: Env,
   openChannel: (env: Env, log: Log) => Promise<Channel>,
   log: Log,
-  overrides: { retryBaseMs?: number } = {},
+  overrides: { retryBaseMs?: number; tools?: readonly AnyGuardedTool[] } = {},
 ): Promise<Tether> {
   const config = loadConfig(env);
   mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
@@ -37,5 +38,6 @@ export async function run(
     timeZone: config.timeZone,
     ...(calendar ? { calendar } : {}),
     ...(overrides.retryBaseMs === undefined ? {} : { retryBaseMs: overrides.retryBaseMs }),
+    ...(overrides.tools === undefined ? {} : { tools: overrides.tools }),
   });
 }

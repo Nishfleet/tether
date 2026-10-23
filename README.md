@@ -60,7 +60,8 @@ without the model. Text `RESUME` to continue.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
   `reminder_list`, `reminder_cancel`, `location_request`, `location_last` and
   `places_nearby`, plus the calendar and contacts tools when an account is connected (see
-  Calendar and contacts). Nothing else.
+  Calendar and contacts). Nothing else. Any tool that can act for Nish carries
+  `askFirst`; see Safety rules.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
   model group once the context passes `contextWindow - 16384` tokens
@@ -351,6 +352,50 @@ touches Photon or a real model. `tests/crash.test.ts` starts the real app as a
 child process, kills it with SIGKILL mid-model-call and mid-send, restarts it on
 the same state directory and checks that the reply is delivered, that the thread
 and memory notes are still there, and that STOP survives the kill.
+
+## Safety rules
+
+Every rule below is enforced by code or by the host, never by a line in the
+model's prompt. A rule that only the host can enforce says so.
+
+| Rule | Enforced in code? | Where | Test that proves it |
+| --- | --- | --- | --- |
+| Sender allowlist: only one handle, direct chats, text only | Yes | `classify` in `src/control.ts`, before the model | `tests/unit.test.ts` "accepts only the allowed handle, however it is formatted"; `tests/app.test.ts` "ignores other senders and group chats without calling the model or replying" |
+| STOP and RESUME: STOP halts everything, from the allowed sender only | Yes | `onStop` and `onResume` in `src/app.ts`, decided before the model | `tests/app.test.ts` "STOP aborts the model call and sends nothing for it; RESUME re-asks and replies"; `tests/crash.test.ts` "stays stopped after a kill until RESUME" |
+| Ask-first: a tool with `askFirst` runs only after YES | Yes | `beforeTool` hook in `src/approval.ts`, in Tether's own process | `tests/approval.test.ts` "texts a one-line summary, runs nothing yet, and runs the tool only after YES" |
+| Only a YES from the allowed sender approves; tool output and model text never do | Yes | `classify` plus `answer` in `src/approval.ts`, fed only by inbound messages | `tests/approval.test.ts` "treats YES inside tool output and in model text as nothing" and "ignores YES from another sender and YES inside a longer message" |
+| NO, silence for 24 hours, and STOP cancel a pending approval | Yes | `answer`, `expire` and `cancelAll` in `src/approval.ts` | `tests/approval.test.ts` "cancels on NO: the tool never runs and the model is told", "cancels after silence and tells the model" and "cancels the pending approval on STOP, and a later YES runs nothing" |
+| A pending approval survives a restart and is never asked twice | Yes | the approval document, `api.memo` and one durable key per call | `tests/crash.test.ts` "keeps a pending approval across a kill, asks once, and runs the tool only on YES" and "keeps a pending approval across a clean restart too" |
+| Money is a hard no | Yes, for a tool that declares `money: true`: the hook blocks it with no question. No payment tool exists | `beforeTool` hook in `src/approval.ts` | `tests/approval.test.ts` "blocks a money tool outright, with no question to Nish". A tool that moves money without declaring it is stopped only by review. |
+| Scoped keys: each credential is the narrowest the provider offers, in a root-owned env file | No. The provider's key scope and file permissions enforce it. The app reads only named variables and logs no secret | host config in `Nishfleet/fleet-ops` | `tests/unit.test.ts` "names every missing variable and never echoes a value"; `tests/crash.test.ts` "does not leak message text or handles into its logs". The scope itself has no test here. |
+| Firewall: the service account reaches only its allowed hosts | No. The host firewall enforces it | host config in `Nishfleet/fleet-ops`; each new outbound path ships with a real call as proof | none in this repo |
+
+### Ask-first contract for tool authors
+
+Mark a tool with `askFirst` and Tether texts Nish before it runs:
+
+```ts
+import { Type } from "@earendil-works/pi-ai";
+import { defineAskFirstTool } from "./approval.ts";
+
+export const sendText = defineAskFirstTool({
+  name: "send_text",
+  description: "Send a text to a person.",
+  parameters: Type.Object({ to: Type.String() }),
+  askFirst: (args) => `Send a text to ${args.to}.`,
+  execute: async (args) => ({ output: [{ type: "text", text: "sent" }] }),
+});
+```
+
+- `askFirst: true` asks with a default summary built from the tool name and arguments.
+- `askFirst: (args) => string | undefined` returns a short summary when approval is needed. It returns `undefined` when the call needs none.
+- `money: true` makes Tether refuse the tool outright, with no question.
+- Any extension installed in the registry is covered. The hook finds the tool by name, so nothing else needs wiring.
+- Tether texts one line: `Allow this? <summary> Reply YES to allow or NO to cancel. No answer within 24 hours cancels it.` Only one question is open at a time. YES or NO answers the open one.
+- Only the exact text YES from the allowed sender runs the tool. NO, 24 hours of silence and STOP cancel it, and the model gets a blocked result.
+- A YES that arrives after the 24 hours are over cancels the approval and is not read as consent, even if no tool was waiting at that moment.
+- Known limit: a second YES that Nish typed before he saw the next question can answer that next question, because a reply carries no code. Questions are asked one at a time, so the owner sees each summary before the next one is open.
+- A restart keeps the pending approval. The approval is filed once per tool call, so a restart never files it twice. If a kill lands between handing the question to iMessage and recording that it was sent, the question text can go out a second time.
 
 ## Phase 2 rule
 
