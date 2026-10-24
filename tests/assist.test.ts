@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import type { InboundAttachment } from "../src/channel.ts";
 import { ASK_TEXT } from "../src/location.ts";
 import { PLACES_HOST, PLACES_URL } from "../src/places.ts";
+import { SEARCH_URL } from "../src/web.ts";
 import { REMINDER_PREFIX } from "../src/reminders.ts";
 import { STOPPED_TEXT } from "../src/app.ts";
 import { call, flatten, inbound, say } from "./helpers.ts";
@@ -274,5 +275,73 @@ describe("location and nearby places", () => {
     await rig.channel.sentCount(2);
     assert.match(flatten(rig.model.requests.at(-1) as never), /places lookup failed/i);
     assert.ok(rig.logs.some((entry) => entry.event === "places_failed"));
+  });
+});
+
+describe("web search and reading", () => {
+  let rig: Rig;
+  beforeEach(async () => {
+    rig = new Rig();
+    await rig.open();
+  });
+  afterEach(() => rig.close());
+
+  const PAGE =
+    "<!doctype html><html><head><title>Kombucha</title></head><body><nav>Home About</nav>" +
+    `<article><p>${"Kombucha is a fermented tea. ".repeat(20)}</p></article><script>alert(1)</script></body></html>`;
+
+  const web = (seen: Seen[], pageStatus = 200) => async (url: string, init: Seen["init"]) => {
+    seen.push({ url, init });
+    if (url === SEARCH_URL) {
+      const results = [{ title: "Kombucha", url: "https://tea.test/kombucha", text: "A fermented tea.", publishedDate: "2026-10-01T00:00:00.000Z" }];
+      return new Response(JSON.stringify({ results }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(PAGE, { status: pageStatus, headers: { "content-type": "text/html; charset=utf-8" } });
+  };
+
+  it("searches the web, then reads a result in full, on the two public hosts", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_search", { query: "kombucha" }), call("web_read", { url: "https://tea.test/kombucha" }), say("It is a fermented tea."));
+    await rig.boot({ fetch: web(seen), searchApiKey: "exa-key" });
+    rig.channel.push(inbound("m1", "what is kombucha"));
+    await rig.channel.sentCount(1);
+    const found = flatten(rig.model.requests[1] as never);
+    assert.match(found, /1 result\(s\) for \\"kombucha\\"/);
+    assert.match(found, /Kombucha \(2026-10-01\)\\nhttps:\/\/tea\.test\/kombucha/);
+    assert.match(found, /untrusted data/);
+    const read = flatten(rig.model.requests.at(-1) as never);
+    assert.match(read, /Kombucha is a fermented tea/);
+    assert.doesNotMatch(read, /Home About|alert/);
+    assert.deepEqual(rig.texts(), ["It is a fermented tea."]);
+    assert.equal(seen.length, 2);
+    assert.equal(new URL(seen[0]?.url ?? "").host, new URL(SEARCH_URL).host);
+    assert.equal(seen[0]?.init.headers["x-api-key"], "exa-key");
+    assert.equal(seen[0]?.init.redirect, "error");
+    assert.equal(seen[1]?.init.redirect, "follow");
+  });
+
+  it("says search is not set up when no key is configured, without calling out", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_search", { query: "tea" }), say("I cannot search yet."));
+    await rig.boot({ fetch: web(seen) });
+    rig.channel.push(inbound("m1", "look it up"));
+    await rig.channel.sentCount(1);
+    assert.match(flatten(rig.model.requests[1] as never), /TETHER_SEARCH_API_KEY is missing/);
+    assert.equal(seen.length, 0);
+  });
+
+  it("refuses a link that is not public and reports a page it cannot read", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_read", { url: "http://127.0.0.1:4000/health/readiness" }), call("web_read", { url: "https://tea.test/gone" }), say("No luck."));
+    await rig.boot({ fetch: web(seen, 404) });
+    rig.channel.push(inbound("m1", "read that"));
+    await rig.channel.sentCount(1);
+    assert.match(flatten(rig.model.requests[1] as never), /not a public web link/);
+    assert.match(flatten(rig.model.requests.at(-1) as never), /could not be read/);
+    assert.deepEqual(
+      seen.map((entry) => entry.url),
+      ["https://tea.test/gone"],
+    );
+    assert.ok(rig.logs.some((entry) => entry.event === "web_read_failed"));
   });
 });

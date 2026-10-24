@@ -124,6 +124,7 @@ describe("tether app, in process", () => {
     assert.match(INSTRUCTIONS, /one reply/);
     assert.match(INSTRUCTIONS, /text_owner/);
     assert.match(INSTRUCTIONS, /never promise a follow-up unless you set one/);
+    assert.match(INSTRUCTIONS, /web_search and read a page in full with web_read/);
   });
 
   it("ignores other senders and group chats without calling the model or replying", opts, async () => {
@@ -186,6 +187,8 @@ describe("tether app, in process", () => {
       "reminder_set",
       "text_owner",
       "time_now",
+      "web_read",
+      "web_search",
     ]);
   });
 

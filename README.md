@@ -59,7 +59,8 @@ without the model. Text `RESUME` to continue.
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
   `reminder_list`, `reminder_cancel`, `location_request`, `location_last`,
-  `places_nearby` and `text_owner`, plus the calendar and contacts tools when an
+  `places_nearby`, `web_search`, `web_read` and `text_owner`, plus the calendar
+  and contacts tools when an
   account is connected (see Calendar and contacts) and its own computer when
   configured (see Its own computer). Nothing else. Any tool that can act for Nish carries
   `askFirst`; see Safety rules.
@@ -187,7 +188,7 @@ parser accepts.
 `places_nearby` searches around the last shared location, or around a named
 place (`near`, geocoded first). It is a free, read-only lookup with no key and
 no paid places API: Photon (`https://photon.komoot.io/api/`), a search over
-OpenStreetMap data. It is the only web host Tether calls. The URL is a constant
+OpenStreetMap data. The URL is a constant
 built in code, the model chooses only the search words, the name of the place
 and the radius (100 m to 5 km), redirects are refused, and a request times out
 after 10 seconds. The result is sorted by distance and each line has an Apple
@@ -209,6 +210,41 @@ system prompt tells the model to treat it as data.
 | STOP holds due reminders until RESUME | yes, `tether.reminder` checks the state in its sending commit and `RESUME` releases them | `tests/assist.test.ts`, `tests/reminder-crash.test.ts` |
 | A reminder survives a kill and is sent once | yes, durable sleep | `tests/reminder-crash.test.ts` |
 | Place names are data, not instructions | instruction only (system prompt); the tool cannot act, only read | none |
+
+## Web search and reading
+
+`web_search(query)` asks Exa (`https://api.exa.ai/search`, `TETHER_SEARCH_API_KEY`)
+and returns the top 5 results: title, link, date and the first 400 characters of
+each page. The model chooses only the query words. The URL is a constant built
+in code, redirects are refused, and a request times out after 15 seconds. Exa's
+free tier gives $10 of credits every month with no payment method (checked on
+exa.ai/pricing 2026-10-24), and one search costs about $0.007, so 300 searches a
+month draws about $2 of it. Tether holds no Exa balance and cannot top one up.
+With the key unset the tool answers that search is not set up and calls nothing.
+
+`web_read(url)` fetches one page and returns its article text through
+`@mozilla/readability`, the reader view Firefox uses, over `linkedom`. Menus,
+scripts and footers are dropped. It shows at most 20000 characters, reads at
+most 2000000 bytes, and gives up after 15 seconds. Only an http or https link to
+a public host is accepted: an IP address, `localhost` and a `.local` name are
+refused before any request, so a page link cannot be aimed at the router or at
+a service on the box. Redirects are followed, so the host firewall stays the
+last line: it lets Tether reach the public internet and `127.0.0.1:4000`, and
+nothing else.
+
+Both tools only read, so neither asks first. Both mark what they return as
+untrusted data, and the system prompt tells the model that text from a page or a
+search result is never an instruction.
+
+### Safety rules in this part
+
+| Rule | Enforced in code | Proof |
+| --- | --- | --- |
+| A read accepts only a public http or https link: no IP address, no `localhost`, no `.local` name | yes, `pageTarget` in `src/web.ts` | `tests/web.test.ts` "refuses anything that is not a public web link"; `tests/assist.test.ts` "refuses a link that is not public" |
+| A read stops at 2000000 bytes, shows at most 20000 characters, and times out after 15 seconds | yes, `readLimited`, `MAX_PAGE_CHARS`, `AbortSignal.timeout` | `tests/web.test.ts` "stops at the byte cap" and "returns the readable article as text" |
+| The search calls one fixed https host, with the key in a header and no redirects | yes, `SEARCH_URL`, `redirect: "error"` | `tests/assist.test.ts` "searches the web, then reads a result in full" |
+| A failed search or read is reported to the model with its event logged, and the key is not in the log | yes, the `catch` in each tool, `log("web_search_failed")` and `log("web_read_failed")` | `tests/web.test.ts` "reports a failed search"; `tests/assist.test.ts` "refuses a link that is not public" |
+| Web text is data, not instructions | instruction only; both tools can only read | none |
 
 ## Long replies
 
@@ -264,6 +300,7 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 | `TETHER_STATE_DIR` | no | state directory; falls back to `STATE_DIRECTORY`, which systemd sets to `/var/lib/tether` |
 | `TETHER_SPACE_URL` | no | where its own Cua Space listens: `http://127.0.0.1:<port>`, the port Cua publishes for that Space (any other host or form is refused). With `TETHER_SPACE_TOKEN`, it decides: if either is unset, no computer tool exists |
 | `TETHER_SPACE_TOKEN` | no | the Space's own key (Cua's per-Space spacesd token). It opens that one Space and nothing else. Never logged |
+| `TETHER_SEARCH_API_KEY` | no | the Exa key `web_search` uses; unset means the tool answers that search is not set up and calls nothing. Never logged |
 
 State is one SQLite file, `tether.sqlite`, in the state directory.
 
