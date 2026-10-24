@@ -470,8 +470,9 @@ describe("tether app, in process", () => {
       channel.push(inbound("m2", "hello?"));
       await logged("budget_exceeded", 2);
       assert.equal(channel.sent.length, 1);
-      const second = logs.filter((line) => line.includes('"event":"budget_exceeded"'))[1] ?? "";
-      assert.match(second, /"texted":false/);
+      const lines = logs.filter((line) => line.includes('"event":"budget_exceeded"'));
+      assert.match(lines[0] ?? "", /"texted":true/);
+      assert.match(lines[1] ?? "", /"texted":false/);
     });
 
     it("answers again after UTC midnight with no manual step", opts, async () => {
@@ -498,6 +499,27 @@ describe("tether app, in process", () => {
       channel.push(inbound("m2", "again"));
       await channel.sentCount(2);
       assert.equal(channel.sent[1]?.text, CAPS_SPENT_TEXT);
+    });
+
+    it("stays quiet on a budget error after a restart on the same day", opts, async () => {
+      model.enqueue(budget());
+      await boot(5, { now: () => morning });
+      channel.push(inbound("m1", "hi"));
+      await channel.sentCount(1);
+      assert.deepEqual(channel.sent, [{ space: SPACE, text: CAPS_SPENT_TEXT }]);
+      await logged("reply_sent");
+      const first = channel;
+      await tether?.stop();
+      tether = undefined;
+      channel = new FakeChannel();
+      model.enqueue(budget());
+      await boot(5, { now: () => morning });
+      channel.push(inbound("m2", "still there?"));
+      await logged("budget_exceeded", 2);
+      assert.equal(first.sent.length, 1);
+      assert.equal(channel.sent.length, 0);
+      const second = logs.filter((line) => line.includes('"event":"budget_exceeded"'))[1] ?? "";
+      assert.match(second, /"texted":false/);
     });
 
     it("keeps the apology and sends no caps text for other model errors", opts, async () => {

@@ -128,8 +128,8 @@ exceeded!`).
 
 - Tether tells that error apart from every other model error by matching
   `budget_exceeded` or `Budget has been exceeded` in the error text that Pi
-  durable stores as the `detail` of an `unanswered` / `model_error` input. Any
-  other error keeps the fixed apology.
+  durable stores as the `detail` of an `unanswered` settlement. Any other
+  error keeps the fixed apology.
 - On the first such error of a day it sends the owner one text, `Both model
   budgets are spent, back after 00:00 UTC.`, instead of the apology. A second
   budget error that day sends nothing (the `budget_exceeded` log line says
