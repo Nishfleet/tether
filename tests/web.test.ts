@@ -96,6 +96,8 @@ describe("page target", () => {
       "http://127.0.0.1/",
       "http://169.254.169.254/latest/meta-data",
       "http://[::1]/",
+      "http://[::ffff:127.0.0.1]/",
+      "http://[fd00::1]:4000/health/readiness",
       "http://printer.local/",
     ]) {
       assert.equal(pageTarget(bad), undefined, bad);

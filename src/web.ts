@@ -78,8 +78,9 @@ export function pageTarget(raw: string): URL | undefined {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
   const host = url.hostname.toLowerCase();
-  const local = host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host === "[::1]";
-  if (isIP(host) !== 0 || local) return undefined;
+  const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  const local = bare === "localhost" || bare.endsWith(".localhost") || bare.endsWith(".local");
+  if (isIP(bare) !== 0 || local) return undefined;
   return url;
 }
 
