@@ -36,8 +36,7 @@ without the model. Text `RESUME` to continue.
   sender, every group chat and every non-text message is ignored and logged
   with the message id, the reason and a short salted hash of the sender (random
   salt, created once, 0600 in the state directory), never the content or the
-  handle. The one exception is a sent location from the allowed sender in a
-  direct chat (see Location).
+  handle.
 - **STOP and RESUME.** Decided in code before the model is involved, and only
   for the allowed sender. `STOP` records the stopped state durably, aborts the
   running model calls and queued sends, and replies `Stopped`. While stopped,
@@ -59,11 +58,15 @@ without the model. Text `RESUME` to continue.
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
   `reminder_list`, `reminder_cancel`, `location_request`, `location_last`,
-  `places_nearby`, `web_search`, `web_read` (loads a link without asking only when it came from Nish's text or a `web_search` result since his latest text, and asks YES/NO first for any other, showing the full link) and `text_owner`, plus the calendar
-  and contacts tools when an
-  account is connected (see Calendar and contacts) and its own computer when
-  configured (see Its own computer). Nothing else. Any tool that can act for Nish carries
-  `askFirst`; see Safety rules.
+  `places_nearby`, `web_search`, `web_read` (loads a link without asking only
+  when it came from Nish's text or a `web_search` result since his latest text,
+  and asks YES/NO first for any other, showing the full link) and
+  `text_owner`, plus the email, calendar and contacts tools
+  when an account is connected (see Email and Calendar and contacts) and its own
+  computer when configured (see Its own computer), and `fleet_request` when
+  configured (see Fleet requests). Nothing else. Any tool that can act for Nish
+  carries `askFirst`, except `fleet_request`, which only asks Nish's own fleet
+  for work; see Safety rules.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
   model group once the context passes `contextWindow - 16384` tokens
@@ -150,42 +153,24 @@ Reminders live in Tether and arrive as iMessage texts.
 
 ## Location
 
-Tether never reads Find My or live sharing. The owner sends a one-off pin in the
-iMessage chat: **+, Location, Send Pin**. `location_request` texts that ask (one
-fixed sentence, sent through the same durable path) and `location_last` reads the
-saved spot back.
-
-A pin arrives as a file attachment, normally a `.loc.vcf` vCard holding a maps
-link with the coordinates. `src/spectrum.ts` lists the message's
-`attachmentMetadata` and reads a file lazily through the provider's
-`getAttachment`, so the vCard is not turned into a contact. Only after the
-sender check (the allowed handle, direct chat) does the app read the file, and
-only for `.vcf` files and vCard or location MIME types under 64 KB. It takes the
-coordinates from a map URL (`ll`, `sll`, `q`, `center`, `daddr`, `saddr`,
-`near`, or an `@lat,lon` path) or a `GEO` line, refuses numbers out of range,
-and saves the last location with a timestamp in the durable `tether.location`
-document. The model is then told `I shared my location: ...` as a normal turn.
-Every other attachment is still ignored. A vCard with no coordinates is logged
-as `attachment_unparsed` with its file name, MIME type and size, never its
-content, and the coordinates themselves are never logged.
-
-**What a real pin looked like (live, 2026-10-23).** The first real "Send Pin" from
-an iPhone did not arrive as a `.loc.vcf` file. Spectrum delivered it as an
-`unsupported-message` with no text and no attachment, so v0.5.2 ignored it. From
-0.5.3 the app also reads a map link (`maps.apple.com`, `maps.google.*`,
-`google.*/maps`, `maps.app.goo.gl`) found in the message text, the rich-link URL
-(`miniApp.url`), `nativeText` or `subject`, and treats it like a pin when the link
-holds coordinates. A message that is only a map link counts as a location, a
-sentence that contains one is still chat. A short `maps.app.goo.gl` link has no
-coordinates and cannot be expanded (the app makes no other web call), so it is
-not saved. For every non-text message the app logs which fields were present
-(names, lengths and flags, never content) as `inbound_content`, so the next real
-pin shows what Spectrum gave us. See `tests/location.test.ts` for the shapes the
-parser accepts.
+Tether reads the owner's location through Photon's Find My API, the `locations`
+resource of `@photon-ai/advanced-imessage` (2.3.0, pinned), because a pin sent
+from the iPhone arrives as an app balloon Spectrum cannot read (proved live
+2026-10-23). `src/findmy.ts` asks Spectrum's `cloud.issueImessageTokens` for a
+token, opens one gRPC client, and issues a new token only when a call fails as
+unauthenticated. `location_request` sends a Find My request card (the owner must
+tap Share, or Tether texts one fixed sentence if the card cannot be sent),
+`location_last` and `places_nearby` read the owner's current Find My location
+with its age, and answer nothing when the owner is not sharing. A map link pasted
+in chat is plain text: the model reads the coordinates itself. Nothing from Find
+My is stored, the address passed to Photon is the allowed sender's own handle, and
+the log (`findmy_current`) holds only whether a location was found, its type and
+age, never coordinates. The owner approved reading his live Find My location on
+2026-10-23.
 
 ## Nearby places
 
-`places_nearby` searches around the last shared location, or around a named
+`places_nearby` searches around the owner's Find My location, or around a named
 place (`near`, geocoded first). It is a free, read-only lookup with no key and
 no paid places API: Photon (`https://photon.komoot.io/api/`), a search over
 OpenStreetMap data. The URL is a constant
@@ -203,8 +188,7 @@ system prompt tells the model to treat it as data.
 
 | Rule | Enforced in code | Proof |
 | --- | --- | --- |
-| A shared location is accepted from the allowed sender in a direct chat only | yes, `classify` | `tests/location.test.ts`, `tests/assist.test.ts` (stranger, file never read) |
-| Only a vCard or location file under 64 KB is read | yes, `isLocationAttachment` | `tests/location.test.ts` |
+| Find My is read only for the allowed sender's own handle, never stored or logged with coordinates | yes, `createFindMy` takes the one owner address | `tests/findmy.test.ts` |
 | The lookup calls one fixed https host, with no redirects | yes, `PLACES_URL`, `redirect: "error"` | `tests/assist.test.ts`, `tests/location.test.ts` |
 | Reminders text only the owner's chat | yes, the space is saved from accepted messages only | `tests/assist.test.ts` |
 | STOP holds due reminders until RESUME | yes, `tether.reminder` checks the state in its sending commit and `RESUME` releases them | `tests/assist.test.ts`, `tests/reminder-crash.test.ts` |
@@ -302,6 +286,8 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 | `TETHER_SPACE_URL` | no | where its own Cua Space listens: `http://127.0.0.1:<port>`, the port Cua publishes for that Space (any other host or form is refused). With `TETHER_SPACE_TOKEN`, it decides: if either is unset, no computer tool exists |
 | `TETHER_SPACE_TOKEN` | no | the Space's own key (Cua's per-Space spacesd token). It opens that one Space and nothing else. Never logged |
 | `TETHER_SEARCH_API_KEY` | no | the Exa key `web_search` uses; unset means the tool answers that search is not set up and calls nothing. Never logged |
+| `TETHER_TINCAN_CONFIG` | no | path to Tether's own Agent Tincan identity file (agent name `tether`). With `TETHER_TINCAN_BIN`, it decides: if either is unset, `fleet_request` does not exist |
+| `TETHER_TINCAN_BIN` | no | path to the stock `tincan` binary |
 
 State is one SQLite file, `tether.sqlite`, in the state directory.
 
@@ -339,6 +325,49 @@ npm run build
 npm start
 ```
 
+## Email (Gmail)
+
+`Nishfleet/tether#42`. Search, read, draft and send from the same Google
+account the calendar uses. With no Google account connected, no email tool
+exists.
+
+| Tool | What it does | Needs approval |
+| --- | --- | --- |
+| `email_search` | up to 10 newest matches of a Gmail search, short summaries | no |
+| `email_read` | one message in full, plain text | no |
+| `email_draft` | a draft in Nish's own Gmail drafts; nobody receives it | no |
+| `email_send` | an email from Nish's Gmail to someone else | yes, `askFirst` |
+
+`email_send` carries `askFirst` on its registration: Tether texts "Allow this?
+Send an email from your Gmail to <address> — <subject>." and sends only after a
+YES (see Safety rules). Search, read and draft never leave Nish's own mailbox,
+so they do not ask.
+
+Libraries: `@googleapis/gmail` and `google-auth-library` (Google's own). The
+connect step asks for two more scopes for it, `gmail.readonly` and
+`gmail.compose`, next to the calendar and contact scopes.
+
+Email headers, snippets and bodies are untrusted. A result is wrapped in
+`<untrusted_email_data>` with a line saying not to follow instructions inside,
+every field is flattened to one line, tags and control characters are removed
+and the length is capped (a body at 20000 characters). A draft or send refuses
+a recipient or subject that is not a plain single line, so a header such as
+`Bcc:` cannot ride in on either. `email_search` and `email_read` are
+`replay: safe`; `email_draft` and `email_send` are `replay: unsafe` like every
+other tool that acts, so a crash never saves one draft twice or sends twice.
+The server URLs are constants in code, not settings, so no text can point the
+tools at another host. A Google login from before the Gmail scopes answers
+every email call with the setup-again line instead of an error code.
+
+### Texting other people
+
+A `text_person` tool (text a handle that has never texted the line) is not
+built. Photon Spectrum's terms gate starting new conversations to paid tiers:
+cold outreach starts on the Business plan, at 50 new contacts a day, and the
+deliverability guide says cold outreach belongs on A2P channels, not iMessage.
+The free tier Tether runs on is inbound-first, so Tether texts only the owner's
+allowed handle. Revisit if that changes.
+
 ## Calendar and contacts
 
 Phase 2 of `Nishfleet/tether#7`. Google and iCloud, each optional. With neither
@@ -361,7 +390,8 @@ checks that guests the model passes anyway are dropped.
 Libraries: `@googleapis/calendar`, `@googleapis/people` and `google-auth-library`
 (Google's own), `tsdav` for CalDAV and CardDAV, `ical.js` to read and write the
 iCalendar and vCard text. Google scopes: `calendar.events`,
-`calendar.calendarlist.readonly` and `contacts`, nothing wider.
+`calendar.calendarlist.readonly` and `contacts` for this, plus the two Gmail
+scopes listed under Email, nothing wider.
 
 Calendar text, guest names and contact fields are untrusted. A result is wrapped
 in `<untrusted_calendar_data>` or `<untrusted_contact_data>` with a line saying
@@ -394,11 +424,11 @@ systemctl restart tether-agent.service
 ```
 
 `google` asks for the OAuth client id and secret (a Desktop app client with the
-Calendar and People APIs enabled, and the consent screen set to In production,
+Calendar, People and Gmail APIs enabled, and the consent screen set to In production,
 because a refresh token from a Testing screen dies after 7 days), prints a
 consent link with PKCE, and asks for the address the browser lands on after
 consent (the page does not load, the address holds the code). It then makes a
-real calendar and contacts read with the new token and only then writes the
+real calendar, contacts and Gmail read with the new token and only then writes the
 file. `icloud` asks for the Apple ID and an app-specific password
 (appleid.apple.com, Sign-In and Security) and also proves the login with a real
 read before it writes. Each command merges its own variables into the file and
@@ -456,6 +486,32 @@ file and restart. No computer tool is then registered. Delete it: remove
 `src/computer*`, its tests and the `@trycua/cua` dependency, and ask the server
 to delete the Space.
 
+## Fleet requests
+
+`fleet_request(text)` in `src/fleet.ts` sends one fix or feature request from
+Nish to the fleet's `issue-desk` agent over Agent Tincan. `issue-desk` files an
+`agent-ready` issue in a product repo and answers with its link. Tether gets no
+GitHub access, shell or token: only one Agent Tincan identity, named `tether`.
+
+- The model calls it when Nish clearly asks for a change to a product. It does
+  not ask first: the request goes to Nish's own fleet, not to another person.
+  Only Nish's direct messages reach the model, and STOP halts it like any tool.
+- It makes one call to the stock client with an argument array, never a shell
+  string: `tincan ask issue-desk --json -- <text>`, with `TINCAN_CONFIG` set to
+  `TETHER_TINCAN_CONFIG`. The client waits up to its built-in 20 seconds; Tether
+  kills the client at 30 seconds. An answer in time comes back as one line, the
+  issue link. No answer in time gives `Sent to the fleet, request <id>`, and
+  Tether stops there. If Tether's own 30-second kill fires with no answer, the
+  owner hears that the request may still have been sent, so it is never reported
+  as simply lost. A refusal, a client error or an answer it cannot read gives
+  `The fleet request failed: <reason>`.
+
+Setup: the identity file and the `tincan` binary for the service user come from
+`fleet-ops`, not this repo. Switch it off: unset `TETHER_TINCAN_CONFIG` in
+`/etc/tether/tether.env` and restart. No fleet tool is then registered. Delete
+it: remove `src/fleet.ts`, `tests/fleet.test.ts`, the `fleet_request` wiring in
+`src/main.ts`, and the `TincanConfig` lines in `src/config.ts`.
+
 ## Safety rules
 
 Every rule below is enforced by code or by the host, never by a line in the
@@ -465,7 +521,7 @@ model's prompt. A rule that only the host can enforce says so.
 | --- | --- | --- | --- |
 | Sender allowlist: only one handle, direct chats, text only | Yes | `classify` in `src/control.ts`, before the model | `tests/unit.test.ts` "accepts only the allowed handle, however it is formatted"; `tests/app.test.ts` "ignores other senders and group chats without calling the model or replying" |
 | STOP and RESUME: STOP halts everything, from the allowed sender only | Yes | `onStop` and `onResume` in `src/app.ts`, decided before the model | `tests/app.test.ts` "STOP aborts the model call and sends nothing for it; RESUME re-asks and replies"; `tests/crash.test.ts` "stays stopped after a kill until RESUME" |
-| Ask-first: a tool with `askFirst` runs only after YES | Yes | `beforeTool` hook in `src/approval.ts`, in Tether's own process | `tests/approval.test.ts` "texts a one-line summary, runs nothing yet, and runs the tool only after YES" |
+| Ask-first: a tool with `askFirst` runs only after YES | Yes | `beforeTool` hook in `src/approval.ts`, in Tether's own process | `tests/approval.test.ts` "texts a one-line summary, runs nothing yet, and runs the tool only after YES" and "asks before email_send and sends the email only after YES" |
 | Only a YES from the allowed sender approves; tool output and model text never do | Yes | `classify` plus `answer` in `src/approval.ts`, fed only by inbound messages | `tests/approval.test.ts` "treats YES inside tool output and in model text as nothing" and "ignores YES from another sender and YES inside a longer message" |
 | NO, silence for 24 hours, and STOP cancel a pending approval | Yes | `answer`, `expire` and `cancelAll` in `src/approval.ts` | `tests/approval.test.ts` "cancels on NO: the tool never runs and the model is told", "cancels after silence and tells the model" and "cancels the pending approval on STOP, and a later YES runs nothing" |
 | A pending approval survives a restart and is never asked twice | Yes | the approval document, `api.memo` and one durable key per call | `tests/crash.test.ts` "keeps a pending approval across a kill, asks once, and runs the tool only on YES" and "keeps a pending approval across a clean restart too" |
