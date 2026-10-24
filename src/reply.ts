@@ -3,7 +3,7 @@ import { defineTask, type EntryId, type Task, type TaskRuntime, type Tx } from "
 import type { Context } from "@earendil-works/chord";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Channel } from "./channel.ts";
-import { StateDoc, TierDoc } from "./docs.ts";
+import { CapsDoc, StateDoc, TierDoc } from "./docs.ts";
 import type { Log } from "./log.ts";
 import { classifyTier, DEPLOYMENT_HEADER, FALLBACKS_HEADER, ROUTER_DIAGNOSTIC, switchNotice, type Served, type Tier } from "./tier.ts";
 
@@ -23,6 +23,8 @@ export const FAILURE_TEXT = "Sorry, I could not get an answer just now. Please t
 export const SEND_ATTEMPTS = 8;
 export const MAX_PART_CHARS = 3500;
 export const TRUNCATED_MARKER = "(truncated: this reply hit my length limit)";
+export const CAPS_SPENT_TEXT = "Both model budgets are spent, back after 00:00 UTC.";
+const BUDGET_ERROR = /budget_exceeded|budget has been exceeded/i;
 
 export function splitReply(text: string, limit: number = MAX_PART_CHARS): string[] {
   const parts: string[] = [];
@@ -102,6 +104,23 @@ export function createReplyTask(options: { channel: Channel; log: Log; retryBase
         if (settled.status !== "done") log("model_unanswered", { reason: settled.reason });
         if (read) log("model_served", { tier: read.tier, model: read.served.model ?? "", deployment: read.served.deployment ?? "", fallbacks: read.served.fallbacks ?? "" });
         const { space } = task.input;
+        if (settled.status === "unanswered" && typeof settled.detail === "string" && BUDGET_ERROR.test(settled.detail)) {
+          const day = new Date(runtime.now()).toISOString().slice(0, 10);
+          let texted = false;
+          await runtime.commit(async (tx) => {
+            const caps = await tx.doc(CapsDoc);
+            texted = caps.textedOn !== day;
+            if (texted) {
+              caps.textedOn = day;
+              const input: ReplyInput = { space, inbound: null, prompt: null, notice: CAPS_SPENT_TEXT, run: 0 };
+              await tx.createTask(self, input, { ownership: { kind: "conversation" }, conversationId: runtime.conversationId });
+            }
+            await release(tx, task.input.inbound);
+            return { status: "terminal", outcome: { status: "completed", result: null } };
+          }, context);
+          log("budget_exceeded", { inbound: task.input.inbound ?? "notice", texted });
+          return;
+        }
         await runtime.commit(async (tx) => {
           if (read) {
             const tiers = await tx.doc(TierDoc);

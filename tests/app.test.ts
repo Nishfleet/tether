@@ -9,8 +9,8 @@ import type { HarnessSettings } from "@earendil-works/pi-durable";
 import { startTether, type Tether, INSTRUCTIONS, STOPPED_TEXT, RESUMED_TEXT, NOT_STOPPED_TEXT } from "../src/app.ts";
 import { seedNote } from "./offline.ts";
 import { createModelAccess, MAX_OUTPUT_TOKENS } from "../src/model.ts";
-import { FAILURE_TEXT, MAX_PART_CHARS, TRUNCATED_MARKER } from "../src/reply.ts";
-import { ALLOWED, BACKUP_VIA, FakeChannel, FakeModel, KEY, SPACE, call, cut, fail, flatten, hold, inbound, say, via } from "./helpers.ts";
+import { CAPS_SPENT_TEXT, FAILURE_TEXT, MAX_PART_CHARS, TRUNCATED_MARKER } from "../src/reply.ts";
+import { ALLOWED, BACKUP_VIA, FakeChannel, FakeModel, KEY, SPACE, budget, call, cut, fail, flatten, hold, inbound, say, via } from "./helpers.ts";
 import { BACK_TEXT, fallbackText, DEFAULT_REASON, FALLBACK_PREFIX } from "../src/tier.ts";
 
 const opts = { timeout: 30000 };
@@ -37,14 +37,16 @@ describe("tether app, in process", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const logWaiters: { event: string; resolve: () => void }[] = [];
+  const logWaiters: { event: string; count: number; resolve: () => void }[] = [];
 
-  function logged(event: string): Promise<void> {
-    if (logs.some((line) => line.includes(`"event":"${event}"`))) return Promise.resolve();
-    return new Promise((resolve) => logWaiters.push({ event, resolve }));
+  const countEvents = (event: string) => logs.filter((line) => line.includes(`"event":"${event}"`)).length;
+
+  function logged(event: string, count = 1): Promise<void> {
+    if (countEvents(event) >= count) return Promise.resolve();
+    return new Promise((resolve) => logWaiters.push({ event, count, resolve }));
   }
 
-  async function boot(retryBaseMs = 5, extra: { contextWindow?: number; compaction?: HarnessSettings["compaction"] } = {}): Promise<Tether> {
+  async function boot(retryBaseMs = 5, extra: { contextWindow?: number; compaction?: HarnessSettings["compaction"]; now?: () => number } = {}): Promise<Tether> {
     const { models, ref } = createModelAccess({ baseUrl: model.url, apiKey: KEY, ...(extra.contextWindow ? { contextWindow: extra.contextWindow } : {}) });
     tether = await startTether({
       channel,
@@ -56,11 +58,12 @@ describe("tether app, in process", () => {
       log: (event, fields) => {
         logs.push(JSON.stringify({ event, ...fields }));
         for (const waiter of logWaiters.splice(0)) {
-          if (event === waiter.event) waiter.resolve();
+          if (event === waiter.event && countEvents(event) >= waiter.count) waiter.resolve();
           else logWaiters.push(waiter);
         }
       },
       retryBaseMs,
+      ...(extra.now ? { now: extra.now } : {}),
       settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 }, stream: { maxRetries: 0 }, ...(extra.compaction ? { compaction: extra.compaction } : {}) },
     });
     return tether;
@@ -452,5 +455,62 @@ describe("tether app, in process", () => {
     assert.match(line, /"model":"deepseek-v4.1-flash"/);
     assert.match(line, /"deployment":"deployment-backup"/);
     assert.match(line, /"fallbacks":"1"/);
+  });
+
+  describe("daily caps spent", () => {
+    const morning = Date.UTC(2026, 9, 24, 14, 0, 0);
+
+    it("texts once on the first budget error of a day and stays quiet on the second", opts, async () => {
+      model.enqueue(budget());
+      await boot(5, { now: () => morning });
+      channel.push(inbound("m1", "hi"));
+      await channel.sentCount(1);
+      assert.deepEqual(channel.sent, [{ space: SPACE, text: CAPS_SPENT_TEXT }]);
+      model.enqueue(budget());
+      channel.push(inbound("m2", "hello?"));
+      await logged("budget_exceeded", 2);
+      assert.equal(channel.sent.length, 1);
+      const second = logs.filter((line) => line.includes('"event":"budget_exceeded"'))[1] ?? "";
+      assert.match(second, /"texted":false/);
+    });
+
+    it("answers again after UTC midnight with no manual step", opts, async () => {
+      let clock = morning;
+      model.enqueue(budget());
+      await boot(5, { now: () => clock });
+      channel.push(inbound("m1", "hi"));
+      await channel.sentCount(1);
+      clock = Date.UTC(2026, 9, 25, 0, 5, 0);
+      model.enqueue(say("back again"));
+      channel.push(inbound("m2", "good morning"));
+      await channel.sentCount(2);
+      assert.equal(channel.sent[1]?.text, "back again");
+    });
+
+    it("texts again when the caps run out on a later day", opts, async () => {
+      let clock = morning;
+      model.enqueue(budget());
+      await boot(5, { now: () => clock });
+      channel.push(inbound("m1", "hi"));
+      await channel.sentCount(1);
+      clock = Date.UTC(2026, 9, 25, 9, 0, 0);
+      model.enqueue(budget());
+      channel.push(inbound("m2", "again"));
+      await channel.sentCount(2);
+      assert.equal(channel.sent[1]?.text, CAPS_SPENT_TEXT);
+    });
+
+    it("keeps the apology and sends no caps text for other model errors", opts, async () => {
+      let broken = true;
+      model.fallback = () => (broken ? fail() : say("fine"));
+      await boot();
+      channel.push(inbound("m1", "hi"));
+      await channel.sentCount(1);
+      assert.equal(channel.sent[0]?.text, FAILURE_TEXT);
+      broken = false;
+      channel.push(inbound("m2", "again"));
+      await channel.sentCount(2);
+      assert.equal(channel.sent[1]?.text, "fine");
+    });
   });
 });

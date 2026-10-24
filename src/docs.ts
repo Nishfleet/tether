@@ -19,6 +19,10 @@ export type TierState = {
   tier: Tier | null;
 };
 
+export type Caps = {
+  textedOn: string | null;
+};
+
 export type Note = {
   id: string;
   text: string;
@@ -54,5 +58,13 @@ export const TierDoc = defineDoc<TierState>({
   version: 1,
   scope: "session",
   initial: () => ({ tier: null }),
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
+});
+
+export const CapsDoc = defineDoc<Caps>({
+  kind: "tether.caps",
+  version: 1,
+  scope: "session",
+  initial: () => ({ textedOn: null }),
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
 });
