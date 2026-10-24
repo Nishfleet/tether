@@ -8,7 +8,7 @@ import { openCalendar } from "./calendar/index.ts";
 import type { Channel } from "./channel.ts";
 import { type Computer, createComputer } from "./computer.ts";
 import { type Env, loadConfig } from "./config.ts";
-import { createFleet, DESK, type Fleet } from "./fleet.ts";
+import { createFleetTools } from "./fleet.ts";
 import type { Log } from "./log.ts";
 import { createModelAccess } from "./model.ts";
 import { loadSalt } from "./salt.ts";
@@ -19,7 +19,7 @@ export async function run(
   env: Env,
   openChannel: (env: Env, log: Log) => Promise<Channel>,
   log: Log,
-  overrides: { retryBaseMs?: number; tools?: readonly AnyGuardedTool[]; computer?: Computer; fleet?: Fleet } = {},
+  overrides: { retryBaseMs?: number; tools?: readonly AnyGuardedTool[]; computer?: Computer } = {},
 ): Promise<Tether> {
   const config = loadConfig(env);
   mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
@@ -30,9 +30,8 @@ export async function run(
   log("calendar", { sources: calendar ? calendar.backends.calendar.map((backend) => backend.source).join(",") : "" });
   const channel = await openChannel(env, log);
   const computer = overrides.computer ?? (config.computer ? createComputer(config.computer, log) : undefined);
-  const fleet = overrides.fleet ?? (config.tincan ? createFleet(config.tincan, { channel, log }) : undefined);
-  log("fleet", { desk: fleet ? DESK : "" });
-  const tools = [...(computer?.tools ?? []), ...(fleet?.tools ?? []), ...(overrides.tools ?? [])];
+  const fleet = config.tincan ? createFleetTools(config.tincan, log) : [];
+  const tools = [...(computer?.tools ?? []), ...fleet, ...(overrides.tools ?? [])];
   const tether = await startTether({
     channel,
     models,
@@ -44,9 +43,8 @@ export async function run(
     timeZone: config.timeZone,
     ...(calendar ? { calendar } : {}),
     ...(overrides.retryBaseMs === undefined ? {} : { retryBaseMs: overrides.retryBaseMs }),
-    ...(fleet ? { onStop: () => fleet.halt() } : {}),
     ...(tools.length === 0 ? {} : { tools }),
   });
   void computer?.startup();
-  return fleet ? { ...tether, stop: async () => (fleet.halt(), tether.stop()) } : tether;
+  return tether;
 }

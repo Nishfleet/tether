@@ -62,7 +62,6 @@ export type TetherOptions = {
   readonly tools?: readonly AnyGuardedTool[];
   readonly approvalTtlMs?: number;
   readonly calendar?: CalendarOptions;
-  readonly onStop?: () => void;
 };
 
 export type Tether = {
@@ -187,7 +186,6 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
       return "stopped";
     }, context);
     if (outcome !== "stopped") return outcome;
-    options.onStop?.();
     await root.abort(context);
     await root.commit((tx) => queue(tx, notice(message.space, STOPPED_TEXT)), context);
     return outcome;
