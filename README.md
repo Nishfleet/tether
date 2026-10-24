@@ -147,17 +147,14 @@ conversations. A command timeout is 1 to 900 seconds, and a read returns at most
 every computer tool says so and the next call connects again. On start Tether
 logs `computer_ready` or `computer_unreachable`, and chat works either way.
 
-Switch it off: remove the two variables and restart. No computer tool exists
-then.
+Switch it off: remove the two variables and restart. No computer tool exists then.
 
 ## Install and run
 
 A `v*` tag runs `.github/workflows/release.yml`: typecheck, tests, build, and a
 `tether-<tag>.tar.gz` with its sha256 on the GitHub release (the tag must equal
 `v` plus the `package.json` version). The fleet-ops host config unpacks a pinned
-version to `/opt/tether/<version>`. `node dist/index.js --version` prints the
-version.
-
+version to `/opt/tether/<version>`. `node dist/index.js --version` prints it.
 From source, with Node 22.19 or newer:
 
 ```sh
@@ -169,5 +166,4 @@ npm test
 
 ## Rules for changes
 
-CI runs the typecheck, the build and the tests on Node 22.19.0 and 24.x. Pin
-every dependency to an exact version.
+CI runs the typecheck, the build and the tests on Node 22.19.0 and 24.x. Pin every dependency to an exact version.
