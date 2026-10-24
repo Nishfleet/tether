@@ -7,6 +7,7 @@ import { type Fetch, placesTool } from "./places.ts";
 import { createReminderTask, reminderTools } from "./reminders.ts";
 import type { ReplyInput, ReplyState } from "./reply.ts";
 import { textOwnerTool } from "./texts.ts";
+import { webTools, type Resolve } from "./web.ts";
 
 export type AssistOptions = {
   readonly channel: Channel;
@@ -15,6 +16,8 @@ export type AssistOptions = {
   readonly fetch: Fetch;
   readonly userAgent: string;
   readonly log: Log;
+  readonly searchApiKey?: string;
+  readonly resolve?: Resolve;
 };
 
 export function createAssistExtension(options: AssistOptions): Extension {
@@ -27,6 +30,7 @@ export function createAssistExtension(options: AssistOptions): Extension {
       ...locationTools({ reply: options.reply, locations: options.channel.locations }),
       textOwnerTool({ channel: options.channel, log: options.log }),
       placesTool({ fetch: options.fetch, userAgent: options.userAgent, log: options.log, locations: options.channel.locations }),
+      ...webTools({ fetch: options.fetch, userAgent: options.userAgent, log: options.log, searchApiKey: options.searchApiKey, resolve: options.resolve }),
     ],
     tasks: [reminder],
   });

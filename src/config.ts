@@ -17,6 +17,7 @@ export type Config = {
   readonly stateDir: string;
   readonly timeZone: string;
   readonly computer: ComputerConfig | undefined;
+  readonly searchApiKey: string | undefined;
 };
 
 export type PhotonConfig = {
@@ -54,6 +55,13 @@ function required(env: Env, names: readonly string[]): Record<string, string> {
   return found;
 }
 
+function searchKey(value: string | undefined): string | undefined {
+  const key = value?.trim() ?? "";
+  if (key === "") return undefined;
+  if (/\s/.test(key)) throw new Error("invalid environment: TETHER_SEARCH_API_KEY must be one line with no spaces");
+  return key;
+}
+
 export function loadConfig(env: Env): Config {
   const { TETHER_ALLOWED_SENDER, TETHER_LLM_API_KEY } = required(env, ["TETHER_ALLOWED_SENDER", "TETHER_LLM_API_KEY"]);
   const stateDir = env.TETHER_STATE_DIR?.trim() || env.STATE_DIRECTORY?.trim();
@@ -68,6 +76,7 @@ export function loadConfig(env: Env): Config {
     stateDir,
     timeZone,
     computer: loadComputerConfig(env, stateDir),
+    searchApiKey: searchKey(env.TETHER_SEARCH_API_KEY),
   };
 }
 

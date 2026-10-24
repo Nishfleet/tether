@@ -5,6 +5,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { startTether, type Tether } from "../src/app.ts";
 import { createModelAccess } from "../src/model.ts";
 import type { Fetch } from "../src/places.ts";
+import type { Resolve } from "../src/web.ts";
 import { ALLOWED, FakeChannel, FakeModel, KEY } from "./helpers.ts";
 
 export class Rig {
@@ -19,7 +20,7 @@ export class Rig {
     await this.model.start();
   }
 
-  async boot(extra: { fetch?: Fetch; timeZone?: string } = {}): Promise<Tether> {
+  async boot(extra: { fetch?: Fetch; timeZone?: string; searchApiKey?: string; resolve?: Resolve } = {}): Promise<Tether> {
     const { models, ref } = createModelAccess({ baseUrl: this.model.url, apiKey: KEY });
     this.tether = await startTether({
       channel: this.channel,

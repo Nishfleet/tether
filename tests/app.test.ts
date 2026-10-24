@@ -186,6 +186,8 @@ describe("tether app, in process", () => {
       "reminder_set",
       "text_owner",
       "time_now",
+      "web_read",
+      "web_search",
     ]);
   });
 

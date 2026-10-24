@@ -4,11 +4,13 @@ Owner: **nish3451** (`.github/CODEOWNERS`: `* @nish3451`).
 
 Tether is a personal agent that chats over iMessage and runs on the VPS as a
 system unit. It does chat, its own memory notes, reminders and alarms, location
-over iMessage and nearby places, with crash-proofing under all of it. It has no
-shell, no GitHub, Cloudflare or database tokens, no deploys, and one fixed
-read-only web lookup (nearby places). The spec is `Nishfleet/fleet-ops#9980`. The unit, the service user, the
-firewall rule and the host config are owned by `Nishfleet/fleet-ops` (PR #9986,
-merged); this repo is the app.
+over iMessage, nearby places, web search and page reading, with crash-proofing
+under all of it. It has no shell and no GitHub, Cloudflare or database tokens,
+no deploys, and it changes nothing out on the web: its one write is a search
+POST to Exa. The spec is
+`Nishfleet/fleet-ops#9980`. The unit, the service user, the firewall rule and
+the host config are owned by `Nishfleet/fleet-ops` (PR #9986, merged); this repo
+is the app.
 
 ## Off switch (two minutes)
 
@@ -58,10 +60,10 @@ without the model. Text `RESUME` to continue.
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
   `reminder_list`, `reminder_cancel`, `location_request`, `location_last`,
-  `places_nearby` and `text_owner`, plus the calendar and contacts tools when an
-  account is connected (see Calendar and contacts) and its own computer when
-  configured (see Its own computer). Nothing else. Any tool that can act for Nish carries
-  `askFirst`; see Safety rules.
+  `places_nearby`, `web_search`, `web_read` and `text_owner`, plus the calendar
+  and contacts tools when an account is connected (see Calendar and contacts)
+  and its own computer when configured (see Its own computer). Nothing else.
+  Any tool that can act for Nish carries `askFirst`; see Safety rules.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
   model group once the context passes `contextWindow - 16384` tokens
@@ -168,11 +170,11 @@ age, never coordinates. The owner approved reading his live Find My location on
 `places_nearby` searches around the owner's Find My location, or around a named
 place (`near`, geocoded first). It is a free, read-only lookup with no key and
 no paid places API: Photon (`https://photon.komoot.io/api/`), a search over
-OpenStreetMap data. It is the only web host Tether calls. The URL is a constant
-built in code, the model chooses only the search words, the name of the place
-and the radius (100 m to 5 km), redirects are refused, and a request times out
-after 10 seconds. The result is sorted by distance and each line has an Apple
-Maps link. Photon is a shared demo service for light use, which fits one owner.
+OpenStreetMap data. The URL is a constant built in code, the model chooses
+only the search words, the name of the place and the radius (100 m to 5 km),
+redirects are refused, and a request times out after 10 seconds. The result is
+sorted by distance and each line has an Apple Maps link. Photon is a shared demo
+service for light use, which fits one owner.
 If it ever limits Tether, host Photon ourselves and change the one constant.
 
 Place names come from the open map, so they are untrusted data. The tool only
@@ -189,6 +191,58 @@ system prompt tells the model to treat it as data.
 | STOP holds due reminders until RESUME | yes, `tether.reminder` checks the state in its sending commit and `RESUME` releases them | `tests/assist.test.ts`, `tests/reminder-crash.test.ts` |
 | A reminder survives a kill and is sent once | yes, durable sleep | `tests/reminder-crash.test.ts` |
 | Place names are data, not instructions | instruction only (system prompt); the tool cannot act, only read | none |
+
+## Web search and page reading
+
+`web_search` asks Exa (`https://api.exa.ai/search`) for the top 5 results: a
+title, a link, the date and a 400-character snippet. `web_read` fetches a link
+and returns the readable article as plain text, the first 20000 characters,
+using `@mozilla/readability` with `linkedom`.
+
+Search needs `TETHER_SEARCH_API_KEY`, an Exa key on the free tier (no card).
+Without it the tool still exists and answers that it is not set up, and nothing
+is called. The key is a name in the unit's env file, like every other secret.
+A search is one POST to a constant host, and redirects are refused. The search
+host is the only host Tether sends a request body to, and it receives only the
+search words. A result whose link is not a public web link is dropped, and a
+result is printed on one line each, so a title cannot pose as more results. The
+search key stays in this process: it goes in the `x-api-key` header to that one
+host and is never logged (a failed call logs the error name only).
+
+Reading is open to the public web, so the app applies the Phase 2 rule itself.
+A link must be http or https and must name a host, never an IP address, and the
+name must not be localhost, a `.localhost`, `.local`, `.internal`, `.home.arpa`
+or `.ts.net` name. The name is then resolved, and every address it answers with
+must be public, so a public name that leads to a private address is refused
+before anything is sent. `web_read` follows up to 5 redirects, drops each
+abandoned body, checks each hop the same way before that hop is requested, and
+gives the whole read 15 seconds. A name that changes its answer between the
+check and the request is left to the firewall: that is the second line of
+defence, not the first.
+
+A page is fetched up to 2 MB and only `text/*`, `text/html`, and a response with
+no content type at all are read. Scripts never run: the HTML is parsed as text
+and the article is taken out of it, so the worst a hostile page can do is write
+words on the screen. A page with more than 60000 elements or a tree deeper than
+200 levels is refused before Readability parses it, because a hostile page of
+deeply nested tags otherwise pins the process for minutes (measured here: 1.8 MB
+of 4000-deep markup took 273 seconds in Readability). The shape check runs after
+the HTML parse and before the article extraction, because the parse itself is
+cheap (148 ms on 2 MB).
+
+Both tools mark what they return as untrusted data, and the system prompt says
+the same. A web page that says "ignore your instructions" is a page that said
+that, not an instruction.
+
+### Safety rules in this part
+
+| Rule | Enforced in code | Proof |
+| --- | --- | --- |
+| Only the public web is requested: no IP address, no local or tailnet name, a name must resolve only to public addresses, every redirect hop checked | yes, `pageTarget`, `publicAddress` and `follow`; a name that changes its answer between the check and the connection is left to the host firewall | `tests/web.test.ts` "refuses anything that is not a public web link", "accepts only addresses on the public internet", "refuses a name that leads to a private address, before it fetches", "refuses a redirect that leaves the public web, before asking for it" and "stops after five redirects"; `tests/assist.test.ts` "reads a public page and refuses a private link without fetching it" |
+| A page is capped at 2 MB on the wire, 20000 characters to the model, and only text is read; a hostile page shape is refused before Readability parses it | yes, `readLimited`, `MAX_PAGE_CHARS`, `tooComplex` | `tests/web.test.ts` "stops at the byte cap", "refuses a page it cannot read as text" and "refuses a page with a hostile shape before it parses it" |
+| A missing search key makes no request and says so | yes, `webTools` | `tests/assist.test.ts` "says web search is not set up when no key is configured, and never calls out" |
+| A failed search or read is reported to the model, never thrown, and logged by name only | yes, `failure` and the log fields | `tests/web.test.ts` "answers a failed read with a friendly result and logs only the error name" and "answers a failed search the same way" |
+| Web text is data, not instructions | instruction only (system prompt); every result carries the line, and the tools cannot act | `tests/assist.test.ts` "searches through the one search host and marks the results as data" |
 
 ## Long replies
 
@@ -240,6 +294,7 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 | `PHOTON_PROJECT_SECRET` | yes | Photon Spectrum project secret |
 | `TETHER_MODEL_GROUP` | no | router model group the app sends to, default `tether`; the router, not the app, falls back to `assistant`. The primary must be a Claude model: the switch texts and the tier detection assume Claude |
 | `TETHER_TIMEZONE` | no | IANA zone for reminder times, default `Asia/Kolkata` |
+| `TETHER_SEARCH_API_KEY` | no | Exa key for `web_search`; unset means the tool says it is not set up and calls nothing |
 | `TETHER_LLM_BASE_URL` | no | router base URL, default `http://127.0.0.1:4000`; `/v1` is appended unless the path already ends in it |
 | `TETHER_STATE_DIR` | no | state directory; falls back to `STATE_DIRECTORY`, which systemd sets to `/var/lib/tether` |
 | `TETHER_SPACE_URL` | no | where its own Cua Space listens: `http://127.0.0.1:<port>`, the port Cua publishes for that Space (any other host or form is refused). With `TETHER_SPACE_TOKEN`, it decides: if either is unset, no computer tool exists |
@@ -454,7 +509,8 @@ Any web or HTTP tool must refuse loopback, private, link-local and tailnet
 hosts. The model router's port also serves an unauthenticated `/metrics`. The
 places lookup does it by construction: the host is a constant, the model never
 supplies a URL, and the host firewall drops host-local destinations for the
-service user.
+service user. `web_read` takes a URL from the model, so it checks the name on
+every hop itself and treats the firewall as the backstop.
 
 ## Rules for changes
 

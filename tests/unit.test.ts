@@ -63,6 +63,14 @@ describe("config", () => {
     assert.equal(loadConfig({ ...base, TETHER_MODEL_GROUP: " " }).modelGroup, "tether");
   });
 
+  it("reads the search key, and refuses a key that is not one line", () => {
+    const base = { TETHER_ALLOWED_SENDER: "a", TETHER_LLM_API_KEY: "k", TETHER_STATE_DIR: "/x" };
+    assert.equal(loadConfig(base).searchApiKey, undefined);
+    assert.equal(loadConfig({ ...base, TETHER_SEARCH_API_KEY: "  " }).searchApiKey, undefined);
+    assert.equal(loadConfig({ ...base, TETHER_SEARCH_API_KEY: "exa-key\n" }).searchApiKey, "exa-key");
+    assert.throws(() => loadConfig({ ...base, TETHER_SEARCH_API_KEY: "exa key" }), /TETHER_SEARCH_API_KEY/);
+  });
+
   it("defaults the router to loopback port 4000 and takes the state directory from systemd", () => {
     const config = loadConfig({ TETHER_ALLOWED_SENDER: "a", TETHER_LLM_API_KEY: "k", STATE_DIRECTORY: "/var/lib/tether" });
     assert.equal(config.llmBaseUrl, "http://127.0.0.1:4000");
