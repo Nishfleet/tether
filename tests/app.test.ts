@@ -10,8 +10,7 @@ import { startTether, type Tether, INSTRUCTIONS, STOPPED_TEXT, RESUMED_TEXT, NOT
 import { seedNote } from "./offline.ts";
 import { createModelAccess, MAX_OUTPUT_TOKENS } from "../src/model.ts";
 import { FAILURE_TEXT, MAX_PART_CHARS, TRUNCATED_MARKER } from "../src/reply.ts";
-import { ALLOWED, BACKUP_VIA, FakeChannel, FakeModel, KEY, SPACE, call, cut, fail, flatten, hold, inbound, say, via } from "./helpers.ts";
-import { BACK_TEXT, fallbackText, DEFAULT_REASON, FALLBACK_PREFIX } from "../src/tier.ts";
+import { ALLOWED, FakeChannel, FakeModel, KEY, SPACE, call, cut, fail, flatten, hold, inbound, say } from "./helpers.ts";
 
 const opts = { timeout: 30000 };
 
@@ -52,7 +51,6 @@ describe("tether app, in process", () => {
       model: ref,
       storage: await openNodeSqliteStorage(join(dir, "t.sqlite")),
       allowedSender: ALLOWED,
-      salt: "test-salt",
       log: (event, fields) => {
         logs.push(JSON.stringify({ event, ...fields }));
         for (const waiter of logWaiters.splice(0)) {
@@ -189,7 +187,7 @@ describe("tether app, in process", () => {
     ]);
   });
 
-  it("STOP aborts the model call and sends nothing for it; RESUME re-asks and replies", opts, async () => {
+  it("STOP aborts the model call and sends nothing for it; RESUME does not re-ask it", opts, async () => {
     model.enqueue(hold());
     await boot();
     channel.push(inbound("m1", "slow question"));
@@ -201,12 +199,9 @@ describe("tether app, in process", () => {
     assert.deepEqual(model.closed, [0], "the in-flight model request was dropped");
     channel.push(inbound("m3", "are you there"));
     channel.push(inbound("m4", "RESUME"));
-    model.enqueue(say("Here is the answer."));
-    await channel.sentCount(3);
-    const texts = channel.sent.map((entry) => entry.text).sort();
-    assert.deepEqual(texts, [RESUMED_TEXT, "Here is the answer.", STOPPED_TEXT].sort());
-    assert.equal(model.requests.length, 2, "nothing reached the model while stopped");
-    assert.doesNotMatch(JSON.stringify(model.requests[1]), /are you there/);
+    await channel.sentCount(2);
+    assert.deepEqual(channel.sent.map((entry) => entry.text), [STOPPED_TEXT, RESUMED_TEXT]);
+    assert.equal(model.requests.length, 1, "nothing reached the model while stopped, and nothing was asked again");
   });
 
   it("retries a failing send on a durable sleep and delivers it once", opts, async () => {
@@ -242,14 +237,12 @@ describe("tether app, in process", () => {
     assert.match(prompt, /likes tea/);
     assert.match(prompt, /allergic to nuts/);
     const results = JSON.stringify(model.requests[2]?.messages);
-    assert.equal((results.match(/Saved as n[0-9a-f]{8}/g) ?? []).length, 2);
+    assert.equal((results.match(/Saved as n[0-9]+\b/g) ?? []).length, 2);
   });
 
-  it("stores a different note under the full digest when the short id is taken", opts, async () => {
-    const note = "note B";
-    const full = createHash("sha256").update(note).digest("hex");
-    await seedNote(join(dir, "t.sqlite"), { id: `n${full.slice(0, 8)}`, text: "an unrelated note", at: 1 });
-    model.enqueue(call("memory_save", { note }), call("memory_save", { note }), say("done"));
+  it("numbers a new note after the highest id, including notes saved before ids were numbers", opts, async () => {
+    await seedNote(join(dir, "t.sqlite"), { id: "n5f3a9c1e", text: "an older note", at: 1 });
+    model.enqueue(call("memory_save", { note: "note B" }), call("memory_save", { note: "note B" }), say("done"));
     await boot();
     channel.push(inbound("m1", "save it"));
     await channel.sentCount(1);
@@ -257,7 +250,7 @@ describe("tether app, in process", () => {
     channel.push(inbound("m2", "recall"));
     await channel.sentCount(2);
     const memory = String(model.requests.at(-1)?.messages[0]?.content).split("\n").filter((line) => /^n[0-9a-f]+: /.test(line));
-    assert.deepEqual(memory.sort(), [`n${full.slice(0, 8)}: an unrelated note`, `n${full}: ${note}`].sort());
+    assert.deepEqual(memory.sort(), ["n1: note B", "n5f3a9c1e: an older note"]);
   });
 
   it("drops an exhausted send from the in-flight list so RESUME does not re-ask it", opts, async () => {
@@ -274,16 +267,16 @@ describe("tether app, in process", () => {
     assert.equal(model.requests.length, 1, "the dead message was not asked again");
   });
 
-  it("logs a salted hash of an ignored sender", opts, async () => {
+  it("logs only the message id and reason for an ignored sender", opts, async () => {
     await boot();
     channel.push(inbound("x1", "hi", { sender: "stranger@example.test" }));
     channel.push(inbound("m1", "hello"));
     model.enqueue(say("ok"));
     await channel.sentCount(1);
     const line = logs.find((entry) => entry.includes('"ignored"')) ?? "";
-    const from = /"from":"([0-9a-f]+)"/.exec(line)?.[1];
-    assert.ok(from);
-    assert.notEqual(from, createHash("sha256").update("stranger@example.test").digest("hex").slice(0, 8));
+    assert.match(line, /"id":"x1"/);
+    assert.ok(!line.includes("stranger@example.test"));
+    assert.deepEqual(JSON.parse(line).at, undefined);
   });
 
   it("compacts the thread when it crosses a small context window and keeps replying", opts, async () => {
@@ -311,146 +304,4 @@ describe("tether app, in process", () => {
     assert.equal(channel.sent[0]?.text, FAILURE_TEXT);
   });
 
-  const notices = () => channel.sent.map((entry) => entry.text).filter((text) => text === BACK_TEXT || text.startsWith(FALLBACK_PREFIX));
-  let sentinel = 0;
-  const quiet = async () => {
-    sentinel += 1;
-    const before = channel.sent.length;
-    channel.push(inbound(`settle-${sentinel}`, "RESUME"));
-    await channel.sentCount(before + 1);
-    const at = channel.sent.findIndex((entry, index) => index >= before && entry.text === NOT_STOPPED_TEXT);
-    channel.sent.splice(at, 1);
-  };
-
-  it("sends no notice for a reply from the primary model", opts, async () => {
-    model.enqueue(say("one"), say("two"));
-    await boot();
-    channel.push(inbound("m1", "a"));
-    await channel.sentCount(1);
-    channel.push(inbound("m2", "b"));
-    await channel.sentCount(2);
-    await quiet();
-    assert.deepEqual(channel.sent.map((entry) => entry.text), ["one", "two"]);
-    assert.deepEqual(notices(), []);
-  });
-
-  it("sends exactly one switch notice when a primary reply is followed by a fallback reply", opts, async () => {
-    model.enqueue(say("one"), via(say("two"), BACKUP_VIA));
-    await boot();
-    channel.push(inbound("m1", "a"));
-    await channel.sentCount(1);
-    channel.push(inbound("m2", "b"));
-    await channel.sentCount(3);
-    await quiet();
-    assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON)]);
-    assert.equal(fallbackText(DEFAULT_REASON), "Switched to the backup model: Claude didn't answer.");
-    assert.deepEqual(channel.sent.map((entry) => entry.text).filter((text) => !notices().includes(text)), ["one", "two"]);
-    assert.ok(channel.sent.every((entry) => entry.space === SPACE));
-  });
-
-  it("sends no extra notice while replies keep coming from the fallback", opts, async () => {
-    model.enqueue(say("one"), via(say("two"), BACKUP_VIA), via(say("three"), BACKUP_VIA), via(say("four"), BACKUP_VIA));
-    await boot();
-    for (const [index, id] of ["m1", "m2", "m3", "m4"].entries()) {
-      channel.push(inbound(id, "q"));
-      await channel.sentCount(index + 1 + (index >= 1 ? 1 : 0));
-    }
-    await quiet();
-    assert.equal(channel.sent.length, 5);
-    assert.equal(notices().length, 1);
-  });
-
-  it("treats a fallback first reply after deploy as a switch", opts, async () => {
-    model.enqueue(via(say("one"), BACKUP_VIA));
-    await boot();
-    channel.push(inbound("m1", "a"));
-    await channel.sentCount(2);
-    await quiet();
-    assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON)]);
-  });
-
-  it("treats the group alias as the primary and the assistant alias as the fallback", opts, async () => {
-    const alias = { model: "tether", headers: { "x-litellm-model-id": "deployment-claude" } };
-    model.enqueue(via(say("one"), alias), via(say("two"), { model: "assistant", headers: { "x-litellm-model-id": "deployment-backup" } }));
-    await boot();
-    channel.push(inbound("m1", "a"));
-    await channel.sentCount(1);
-    channel.push(inbound("m2", "b"));
-    await channel.sentCount(3);
-    await quiet();
-    assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON)]);
-  });
-
-  it("lets the attempted-fallbacks header decide over the model name", opts, async () => {
-    const headers = (count: string) => ({ "x-litellm-model-id": "deployment-x", "x-litellm-attempted-fallbacks": count });
-    model.enqueue(via(say("one"), { model: "tether", headers: headers("0") }), via(say("two"), { model: "tether", headers: headers("1") }));
-    await boot();
-    channel.push(inbound("m1", "a"));
-    await channel.sentCount(1);
-    channel.push(inbound("m2", "b"));
-    await channel.sentCount(3);
-    await quiet();
-    assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON)]);
-  });
-
-  it("leaves the tier unchanged when a reply fails", opts, async () => {
-    model.enqueue(via(say("one"), BACKUP_VIA), fail(), fail(), fail(), fail(), fail(), fail());
-    await boot();
-    channel.push(inbound("m1", "a"));
-    await channel.sentCount(2);
-    channel.push(inbound("m2", "b"));
-    await channel.sentCount(3);
-    model.enqueue(via(say("three"), BACKUP_VIA));
-    channel.push(inbound("m3", "c"));
-    await channel.sentCount(4);
-    await quiet();
-    assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON)]);
-    assert.ok(channel.sent.some((entry) => entry.text === FAILURE_TEXT));
-    assert.ok(!channel.sent.some((entry) => entry.text === BACK_TEXT));
-  });
-
-  it("sends exactly one Back on Claude. when the primary answers again", opts, async () => {
-    model.enqueue(via(say("one"), BACKUP_VIA), say("two"), say("three"));
-    await boot();
-    channel.push(inbound("m1", "a"));
-    await channel.sentCount(2);
-    channel.push(inbound("m2", "b"));
-    await channel.sentCount(4);
-    channel.push(inbound("m3", "c"));
-    await channel.sentCount(5);
-    await quiet();
-    assert.deepEqual(notices(), [fallbackText(DEFAULT_REASON), "Back on Claude."]);
-    assert.equal(BACK_TEXT, "Back on Claude.");
-  });
-
-  it("keeps the tier across a restart and sends nothing for the same tier", opts, async () => {
-    model.enqueue(via(say("one"), BACKUP_VIA));
-    await boot();
-    channel.push(inbound("m1", "a"));
-    await channel.sentCount(2);
-    await logged("reply_sent");
-    const before = channel.sent.map((entry) => entry.text);
-    await tether?.stop();
-    tether = undefined;
-    channel = new FakeChannel();
-    model.enqueue(via(say("two"), BACKUP_VIA));
-    await boot();
-    channel.push(inbound("m2", "b"));
-    await channel.sentCount(1);
-    await quiet();
-    assert.equal(before.length, 2);
-    assert.deepEqual(channel.sent.map((entry) => entry.text), ["two"]);
-  });
-
-  it("logs the deployment id and response model the router reported", opts, async () => {
-    model.enqueue(via(say("one"), BACKUP_VIA));
-    await boot();
-    channel.push(inbound("m1", "a"));
-    await logged("model_served");
-    const line = logs.find((entry) => entry.includes('"event":"model_served"')) ?? "";
-    assert.match(line, /"tier":"fallback"/);
-    assert.match(line, /"model":"deepseek-v4.1-flash"/);
-    assert.match(line, /"deployment":"deployment-backup"/);
-    assert.match(line, /"fallbacks":"1"/);
-  });
 });

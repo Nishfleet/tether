@@ -19,12 +19,10 @@ export type AskFirst<Args = Record<string, unknown>> = true | ((args: Args) => s
 
 export type GuardedTool<P extends TSchema = TSchema, D extends JsonValue = JsonValue> = ToolRegistration<P, D> & {
   readonly askFirst?: AskFirst<Static<P>>;
-  readonly money?: true;
 };
 
 export type AnyGuardedTool = ToolRegistration & {
   readonly askFirst?: true | ((args: never) => string | undefined);
-  readonly money?: true;
 };
 
 export function defineAskFirstTool<P extends TSchema, D extends JsonValue = JsonValue>(tool: GuardedTool<P, D>): GuardedTool<P, D> {
@@ -47,10 +45,8 @@ export type ApprovalState = {
 };
 
 export const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
-export const RESOLVED_LIMIT = 50;
 export const SUMMARY_CHARS = 200;
 export const MAX_TIMER_MS = 2 ** 31 - 1;
-export const MONEY_BLOCK = "Blocked: this tool moves money, which Tether never does.";
 export const BLOCKS: Record<Exclude<ApprovalStatus, "pending" | "approved">, string> = {
   denied: "Blocked: Nish answered NO, so this was not run.",
   expired: "Blocked: Nish did not answer within 24 hours, so this was not run.",
@@ -85,13 +81,6 @@ async function promote(tx: Tx, notify: Notify): Promise<void> {
   if (head && !head.asked) {
     head.asked = true;
     await notify(tx, head.space, askText(head.summary));
-  }
-  let excess = doc.items.filter((item) => item.status !== "pending").length - RESOLVED_LIMIT;
-  for (let index = 0; excess > 0 && index < doc.items.length; ) {
-    if (doc.items[index]?.status !== "pending") {
-      doc.items.splice(index, 1);
-      excess -= 1;
-    } else index += 1;
   }
 }
 
@@ -183,10 +172,6 @@ export function createApprovalExtension(options: ApprovalOptions): Extension {
         beforeTool: async (call, api, context) => {
           const tool = lookup(call.name);
           if (!tool) return undefined;
-          if (tool.money) {
-            log("tool_blocked", { tool: call.name, reason: "money" });
-            return { block: MONEY_BLOCK };
-          }
           const rule = tool.askFirst;
           if (rule === undefined) return undefined;
           const summary = rule === true ? describeCall(call) : (rule as (args: typeof call.arguments) => string | undefined)(call.arguments);

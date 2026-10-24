@@ -18,7 +18,7 @@ export type AssistOptions = {
 };
 
 export function createAssistExtension(options: AssistOptions): Extension {
-  const reminder = createReminderTask({ reply: options.reply });
+  const reminder = createReminderTask({ reply: options.reply, log: options.log });
   return defineExtension({
     name: "tether-assist",
     tools: [

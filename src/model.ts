@@ -1,22 +1,7 @@
-import {
-  appendAssistantMessageDiagnostic,
-  createAssistantMessageEventStream,
-  type AssistantMessageEventStream,
-  createModels,
-  createProvider,
-  type AssistantMessage,
-  type AssistantMessageEvent,
-  type JsonObject,
-  type Model,
-  type Models,
-  type ProviderStreams,
-  type StreamOptions,
-} from "@earendil-works/pi-ai";
+import { createModels, createProvider, type Model, type Models } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import { DEFAULT_MODEL_GROUP } from "./config.ts";
-import type { Log } from "./log.ts";
-import { ROUTER_DIAGNOSTIC, ROUTER_HEADERS } from "./tier.ts";
 
 const PROVIDER_ID = "router";
 
@@ -29,55 +14,7 @@ export function routerBaseUrl(base: string): string {
 export const DEFAULT_CONTEXT_WINDOW = 128000;
 export const MAX_OUTPUT_TOKENS = 16384;
 
-function eventMessage(event: AssistantMessageEvent): AssistantMessage {
-  if (event.type === "done") return event.message;
-  if (event.type === "error") return event.error;
-  return event.partial;
-}
-
-function reportRouter<O extends StreamOptions>(
-  open: (options: O) => AssistantMessageEventStream,
-  options: O | undefined,
-  log: Log | undefined,
-): AssistantMessageEventStream {
-  const details: JsonObject = {};
-  const source = open({
-    ...options,
-    onResponse: async (response, model) => {
-      for (const name of ROUTER_HEADERS) {
-        const value = response.headers[name];
-        if (value !== undefined) details[name] = value;
-      }
-      await options?.onResponse?.(response, model);
-    },
-  } as O);
-  const out = createAssistantMessageEventStream();
-  void (async () => {
-    try {
-      for await (const event of source) {
-        const message = eventMessage(event);
-        if (!message.diagnostics?.some((entry) => entry.type === ROUTER_DIAGNOSTIC)) {
-          appendAssistantMessageDiagnostic(message, { type: ROUTER_DIAGNOSTIC, timestamp: Date.now(), details: { ...details } });
-        }
-        out.push(event);
-      }
-    } catch (error) {
-      log?.("model_stream_failed", { error: error instanceof Error ? error.name : "unknown" });
-    } finally {
-      out.end();
-    }
-  })();
-  return out;
-}
-
-export function routerApi(inner: ProviderStreams, log?: Log): ProviderStreams {
-  return {
-    stream: (model, context, options) => reportRouter((opts) => inner.stream(model, context, opts), options, log),
-    streamSimple: (model, context, options) => reportRouter((opts) => inner.streamSimple(model, context, opts), options, log),
-  };
-}
-
-export function createModelAccess(options: { baseUrl: string; apiKey: string; group?: string; contextWindow?: number; log?: Log }): { models: Models; ref: ModelRef } {
+export function createModelAccess(options: { baseUrl: string; apiKey: string; group?: string; contextWindow?: number }): { models: Models; ref: ModelRef } {
   const baseUrl = routerBaseUrl(options.baseUrl);
   const group = options.group ?? DEFAULT_MODEL_GROUP;
   const model: Model<"openai-completions"> = {
@@ -109,7 +46,7 @@ export function createModelAccess(options: { baseUrl: string; apiKey: string; gr
       },
     },
     models: [model],
-    api: routerApi(openAICompletionsApi(), options.log),
+    api: openAICompletionsApi(),
   });
   const models = createModels();
   models.setProvider(provider);

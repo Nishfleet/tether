@@ -1,11 +1,9 @@
 import { withAbortSignal } from "@earendil-works/chord/context";
-import { defineTask, type EntryId, type Task, type TaskRuntime, type Tx } from "@earendil-works/pi-durable";
+import { defineTask, type EntryId, type Task, type TaskRuntime } from "@earendil-works/pi-durable";
 import type { Context } from "@earendil-works/chord";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Channel } from "./channel.ts";
-import { StateDoc, TierDoc } from "./docs.ts";
+import { StateDoc } from "./docs.ts";
 import type { Log } from "./log.ts";
-import { classifyTier, DEPLOYMENT_HEADER, FALLBACKS_HEADER, ROUTER_DIAGNOSTIC, switchNotice, type Served, type Tier } from "./tier.ts";
 
 export type ReplyInput = {
   space: string;
@@ -55,33 +53,17 @@ async function haltedByStop(input: ReplyInput, runtime: Runtime, context: Contex
   return true;
 }
 
-const release = async (tx: Tx, inbound: string | null) => {
-  if (inbound === null) return;
-  const state = await tx.doc(StateDoc);
-  const index = state.inflight.findIndex((item) => item.inbound === inbound);
-  if (index >= 0) state.inflight.splice(index, 1);
-};
-
-type Answer = { text: string; tier: Tier; served: Served };
-
-function servedBy(last: AssistantMessage): Served {
-  const details = last.diagnostics?.find((entry) => entry.type === ROUTER_DIAGNOSTIC)?.details;
-  const header = (name: string) => (typeof details?.[name] === "string" ? details[name] : undefined);
-  return { model: last.responseModel, deployment: header(DEPLOYMENT_HEADER), fallbacks: header(FALLBACKS_HEADER) };
-}
-
-async function readAnswer(group: string, runtime: Runtime, entry: EntryId, context: Context): Promise<Answer | undefined> {
+async function readAnswer(runtime: Runtime, entry: EntryId, context: Context): Promise<string | undefined> {
   const record = await runtime.entry(entry, context);
   const last = (record?.model ?? []).findLast((message) => message.role === "assistant");
   if (last?.role !== "assistant") return undefined;
   const joined = last.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n").trim();
   if (joined === "") return undefined;
-  const served = servedBy(last);
-  return { text: last.stopReason === "length" ? `${joined}\n\n${TRUNCATED_MARKER}` : joined, tier: classifyTier(served, group), served };
+  return last.stopReason === "length" ? `${joined}\n\n${TRUNCATED_MARKER}` : joined;
 }
 
-export function createReplyTask(options: { channel: Channel; log: Log; retryBaseMs: number; group: string }): Task<ReplyInput, ReplyState, null, object> {
-  const { channel, log, retryBaseMs, group } = options;
+export function createReplyTask(options: { channel: Channel; log: Log; retryBaseMs: number }): Task<ReplyInput, ReplyState, null, object> {
+  const { channel, log, retryBaseMs } = options;
   const self: Task<ReplyInput, ReplyState, null, object> = defineTask<ReplyInput, ReplyState, null>({
     name: "tether.reply",
     version: 1,
@@ -98,22 +80,9 @@ export function createReplyTask(options: { channel: Channel; log: Log; retryBase
         );
         const settled = await submission.wait(aborting);
         const answer = settled.status === "done" ? settled.answer : undefined;
-        const read = answer === undefined ? undefined : await readAnswer(group, runtime, answer, aborting);
+        const read = answer === undefined ? undefined : await readAnswer(runtime, answer, aborting);
         if (settled.status !== "done") log("model_unanswered", { reason: settled.reason });
-        if (read) log("model_served", { tier: read.tier, model: read.served.model ?? "", deployment: read.served.deployment ?? "", fallbacks: read.served.fallbacks ?? "" });
-        const { space } = task.input;
-        await runtime.commit(async (tx) => {
-          if (read) {
-            const tiers = await tx.doc(TierDoc);
-            const text = switchNotice(tiers.tier, read.tier);
-            tiers.tier = read.tier;
-            if (text !== null) {
-              const input: ReplyInput = { space, inbound: null, prompt: null, notice: text, run: 0 };
-              await tx.createTask(self, input, { ownership: { kind: "conversation" }, conversationId: runtime.conversationId });
-            }
-          }
-          return { status: "running", checkpoint: { phase: "send", text: read?.text ?? FAILURE_TEXT, attempt: 0 } };
-        }, context);
+        await runtime.commit(() => ({ status: "running", checkpoint: { phase: "send", text: read ?? FAILURE_TEXT, attempt: 0 } }), context);
       },
       send: async (task, runtime, context) => {
         const { text, attempt } = task.state.checkpoint;
@@ -126,10 +95,7 @@ export function createReplyTask(options: { channel: Channel; log: Log; retryBase
         } catch (error) {
           log("send_failed", { attempt, error: error instanceof Error ? error.name : "unknown" });
           if (attempt + 1 >= SEND_ATTEMPTS) {
-            await runtime.commit(async (tx) => {
-              await release(tx, task.input.inbound);
-              return { status: "terminal", outcome: { status: "failed", error: { message: "send attempts exhausted" } } };
-            }, aborting);
+            await runtime.commit(() => ({ status: "terminal", outcome: { status: "failed", error: { message: "send attempts exhausted" } } }), aborting);
             log("send_gave_up", { inbound: task.input.inbound ?? "notice" });
             return;
           }
@@ -141,10 +107,7 @@ export function createReplyTask(options: { channel: Channel; log: Log; retryBase
           await runtime.commit(() => ({ status: "running", checkpoint: { phase: "send", text, attempt: 0, parts, next: index + 1 } }), aborting);
           return;
         }
-        await runtime.commit(async (tx) => {
-          await release(tx, task.input.inbound);
-          return { status: "terminal", outcome: { status: "completed", result: null } };
-        }, aborting);
+        await runtime.commit(() => ({ status: "terminal", outcome: { status: "completed", result: null } }), aborting);
         log("reply_sent", { inbound: task.input.inbound ?? "notice", attempt });
       },
     },

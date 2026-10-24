@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { Type } from "@earendil-works/pi-ai";
+import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { ProcessOutput, SpacesdClientLike } from "@trycua/cua";
-import { type AnyGuardedTool, defineAskFirstTool } from "./approval.ts";
 import type { ComputerConfig } from "./config.ts";
 import type { Log } from "./log.ts";
 
@@ -29,7 +29,7 @@ export type ComputerDeps = {
 };
 
 export type Computer = {
-  readonly tools: readonly AnyGuardedTool[];
+  readonly tools: readonly ToolRegistration[];
   startup(): Promise<void>;
 };
 
@@ -48,8 +48,7 @@ export function formatBash(result: BashResult): string {
 
 export const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 
-export const readCommand = (path: string) =>
-  `f=${shellQuote(path)}; if [ ! -f "$f" ]; then echo "not a regular file" >&2; exit 3; fi; if [ ! -r "$f" ]; then echo "not readable" >&2; exit 4; fi; wc -c < "$f"; head -c ${READ_BYTES} -- "$f" | base64 -w0`;
+export const readCommand = (path: string) => `head -c ${READ_BYTES} -- ${shellQuote(path)}`;
 
 const succeeded = (result: BashResult) => !result.timedOut && !result.error && result.exitCode === 0;
 
@@ -104,7 +103,7 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
     return (Number.isFinite(seconds) ? Math.max(1, seconds) : DEFAULT_TIMEOUT_SEC) * 1000;
   };
 
-  const run = defineAskFirstTool({
+  const run = defineTool({
     name: "computer_run",
     description:
       "Run a shell command in your own computer: a persistent Linux machine that keeps its files between conversations. Returns the exit code, stdout and stderr. It is separate from Nish's own computers.",
@@ -120,7 +119,7 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
       }),
   });
 
-  const write = defineAskFirstTool({
+  const write = defineTool({
     name: "computer_write",
     description: "Write a text file in your own computer, replacing it if it exists.",
     parameters: Type.Object({ path: Type.String({ minLength: 1 }), content: Type.String() }),
@@ -132,7 +131,7 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
       }),
   });
 
-  const read = defineAskFirstTool({
+  const read = defineTool({
     name: "computer_read",
     description: `Read a text file from your own computer. Shows at most ${READ_BYTES} bytes.`,
     parameters: Type.Object({ path: Type.String({ minLength: 1 }) }),
@@ -140,14 +139,7 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
     execute: (args) =>
       attempt(async (own) => {
         const result = toBash(await own.sh(readCommand(args.path), 60000));
-        if (!succeeded(result)) return failure(formatBash(result));
-        const newline = result.stdout.indexOf("\n");
-        const size = Number(result.stdout.slice(0, newline < 0 ? undefined : newline).trim());
-        const data = Buffer.from(newline < 0 ? "" : result.stdout.slice(newline + 1).trim(), "base64");
-        if (!Number.isInteger(size) || data.length !== Math.min(size, READ_BYTES)) return failure(`${args.path} could not be read in full.`);
-        if (data.includes(0)) return failure(`${args.path} is a binary file.`);
-        const shown = data.toString("utf8");
-        return text(size > data.length ? `${shown}\n[cut at ${data.length} bytes of ${size}]` : shown);
+        return succeeded(result) ? text(result.stdout) : failure(formatBash(result));
       }),
   });
 
@@ -161,5 +153,5 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
     }
   };
 
-  return { tools: [run, write, read] as readonly AnyGuardedTool[], startup };
+  return { tools: [run, write, read] as readonly ToolRegistration[], startup };
 }
