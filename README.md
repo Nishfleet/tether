@@ -41,6 +41,7 @@ messages someone else or spends money.
 | `calendar_invite` | an event with guests, who get an invitation | **yes** |
 | `contacts_find`, `contacts_add` | look up and save contacts | no |
 | `computer_run`, `computer_write`, `computer_read` | its own computer | no |
+| `fleet_request` | one fix request to the fleet's `issue-desk` over Agent Tincan (`src/fleet.ts`); replies with the issue link or the request id | no |
 
 **Ask first.** A tool that messages someone other than the owner carries
 `askFirst` (`src/approval.ts`). Before it runs, Tether texts the owner what it is
@@ -86,6 +87,7 @@ The unit loads `/etc/tether/tether.env` (root:tether 0640, never in git).
 | `TETHER_TIMEZONE` | no | IANA zone, default `Asia/Kolkata` |
 | `TETHER_STATE_DIR` | no | state directory, falls back to `STATE_DIRECTORY` (`/var/lib/tether`) |
 | `TETHER_SPACE_URL`, `TETHER_SPACE_TOKEN` | no | its own computer; both or no computer tool |
+| `TETHER_TINCAN_CONFIG`, `TETHER_TINCAN_BIN` | no | Tether's Agent Tincan identity file and the `tincan` binary; both or no `fleet_request` |
 | `TETHER_GOOGLE_CLIENT_ID`, `TETHER_GOOGLE_CLIENT_SECRET`, `TETHER_GOOGLE_REFRESH_TOKEN` | no | Google account, all three or none |
 | `TETHER_ICLOUD_APPLE_ID`, `TETHER_ICLOUD_APP_PASSWORD` | no | iCloud account, both or none |
 
