@@ -8,6 +8,7 @@ import { openCalendar } from "./calendar/index.ts";
 import type { Channel } from "./channel.ts";
 import { type Computer, createComputer } from "./computer.ts";
 import { type Env, loadConfig } from "./config.ts";
+import { createFleetTools } from "./fleet.ts";
 import type { Log } from "./log.ts";
 import { createModelAccess } from "./model.ts";
 import { loadSalt } from "./salt.ts";
@@ -29,7 +30,8 @@ export async function run(
   log("calendar", { sources: calendar ? calendar.backends.calendar.map((backend) => backend.source).join(",") : "" });
   const channel = await openChannel(env, log);
   const computer = overrides.computer ?? (config.computer ? createComputer(config.computer, log) : undefined);
-  const tools = [...(computer?.tools ?? []), ...(overrides.tools ?? [])];
+  const fleet = config.tincan ? createFleetTools(config.tincan, log) : [];
+  const tools = [...(computer?.tools ?? []), ...fleet, ...(overrides.tools ?? [])];
   const tether = await startTether({
     channel,
     models,
