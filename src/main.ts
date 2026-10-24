@@ -8,6 +8,7 @@ import { openCalendar } from "./calendar/index.ts";
 import type { Channel } from "./channel.ts";
 import { type Computer, createComputer } from "./computer.ts";
 import { type Env, loadConfig } from "./config.ts";
+import { openEmail } from "./email/index.ts";
 import type { Log } from "./log.ts";
 import { createModelAccess } from "./model.ts";
 import { loadSalt } from "./salt.ts";
@@ -25,8 +26,10 @@ export async function run(
   chmodSync(config.stateDir, 0o700);
   const storage = await openNodeSqliteStorage(join(config.stateDir, DATABASE_FILE));
   const { models, ref } = createModelAccess({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey, group: config.modelGroup, log });
-  const calendar = openCalendar(loadCalendarConfig(env, config.timeZone));
+  const google = loadCalendarConfig(env, config.timeZone);
+  const calendar = openCalendar(google);
   log("calendar", { sources: calendar ? calendar.backends.calendar.map((backend) => backend.source).join(",") : "" });
+  const email = openEmail(google.google, config.timeZone);
   const channel = await openChannel(env, log);
   const computer = overrides.computer ?? (config.computer ? createComputer(config.computer, log) : undefined);
   const tools = [...(computer?.tools ?? []), ...(overrides.tools ?? [])];
@@ -40,6 +43,7 @@ export async function run(
     log,
     timeZone: config.timeZone,
     ...(calendar ? { calendar } : {}),
+    ...(email ? { email } : {}),
     ...(overrides.retryBaseMs === undefined ? {} : { retryBaseMs: overrides.retryBaseMs }),
     ...(tools.length === 0 ? {} : { tools }),
   });

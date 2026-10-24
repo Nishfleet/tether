@@ -102,6 +102,8 @@ describe("google backends against a fake API", () => {
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
       "https://www.googleapis.com/auth/contacts",
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.compose",
     ]);
     assert.ok(ACCESS_TOKEN);
   });

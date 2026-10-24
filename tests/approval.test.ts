@@ -10,6 +10,7 @@ import { createRegistry, Harness, type Tx } from "@earendil-works/pi-durable";
 import { answer, APPROVAL_TTL_MS, ApprovalDoc, askText, BLOCKS, describeCall, MONEY_BLOCK, SUMMARY_CHARS } from "../src/approval.ts";
 import { startTether, type Tether } from "../src/app.ts";
 import { classify } from "../src/control.ts";
+import type { EmailBackend, EmailMessage, NewEmail } from "../src/email/types.ts";
 import { createModelAccess } from "../src/model.ts";
 import { ALLOWED, FakeChannel, FakeModel, KEY, SPACE, call, flatten, inbound, say } from "./helpers.ts";
 import { createTestTools } from "./tools.ts";
@@ -17,6 +18,21 @@ import { createTestTools } from "./tools.ts";
 const opts = { timeout: 30000 };
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const ASK_BOB = askText("Send a text to bob.");
+
+class FakeEmailBackend implements EmailBackend {
+  readonly source = "google" as const;
+  sent: NewEmail[] = [];
+  async search() {
+    return [];
+  }
+  async read(): Promise<EmailMessage> {
+    throw new Error("empty mailbox");
+  }
+  async draft() {}
+  async send(email: NewEmail): Promise<void> {
+    this.sent.push(email);
+  }
+}
 
 describe("ask-first approval, in process", () => {
   let dir: string;
@@ -40,7 +56,7 @@ describe("ask-first approval, in process", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  async function boot(approvalTtlMs?: number): Promise<Tether> {
+  async function boot(approvalTtlMs?: number, email?: EmailBackend): Promise<Tether> {
     const { models, ref } = createModelAccess({ baseUrl: model.url, apiKey: KEY });
     tether = await startTether({
       channel,
@@ -53,6 +69,7 @@ describe("ask-first approval, in process", () => {
       retryBaseMs: 5,
       settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 }, stream: { maxRetries: 0 } },
       tools: createTestTools(ran),
+      ...(email ? { email: { backend: email, timezone: "Asia/Kolkata" } } : {}),
       ...(approvalTtlMs === undefined ? {} : { approvalTtlMs }),
     });
     return tether;
@@ -71,6 +88,21 @@ describe("ask-first approval, in process", () => {
     await channel.sentCount(2);
     assert.deepEqual(ran, ["send_text:bob"]);
     assert.equal(channel.sent[1]?.text, "Sent it.");
+  });
+
+  it("asks before email_send and sends the email only after YES", opts, async () => {
+    const email = new FakeEmailBackend();
+    model.enqueue(call("email_send", { to: "asha@example.test", subject: "Lunch", body: "Noon works for me." }), say("Sent the email."));
+    await boot(undefined, email);
+    channel.push(inbound("m1", "email asha@example.test asking if noon works for lunch"));
+    await channel.sentCount(1);
+    assert.deepEqual(channel.sent, [{ space: SPACE, text: askText("Send an email from your Gmail to asha@example.test — Lunch.") }]);
+    await pause(150);
+    assert.deepEqual(email.sent, []);
+    channel.push(inbound("m2", "yes"));
+    await channel.sentCount(2);
+    assert.deepEqual(email.sent, [{ to: "asha@example.test", subject: "Lunch", body: "Noon works for me." }]);
+    assert.equal(channel.sent[1]?.text, "Sent the email.");
   });
 
   it("cancels on NO: the tool never runs and the model is told", opts, async () => {
