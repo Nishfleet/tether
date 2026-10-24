@@ -1,5 +1,6 @@
 import { calendar, type calendar_v3 } from "@googleapis/calendar";
 import { people, type people_v1 } from "@googleapis/people";
+import { GMAIL_SCOPES } from "../email/gmail.ts";
 import { OAuth2Client } from "google-auth-library";
 import type { GoogleConfig } from "./config.ts";
 import { isoDay, parseWhen } from "./time.ts";
@@ -9,12 +10,14 @@ export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
   "https://www.googleapis.com/auth/contacts",
+  ...GMAIL_SCOPES,
 ] as const;
 
 export type GoogleEndpoints = {
   readonly tokenUrl?: string;
   readonly calendarRoot?: string;
   readonly peopleRoot?: string;
+  readonly gmailRoot?: string;
 };
 
 const MAX_EVENTS = 250;
