@@ -4,8 +4,8 @@ import { defineDoc, defineTask, defineTool, type ConversationId, type Task, type
 import { type CalendarOptions, dedupe } from "./calendar/tools.ts";
 import { addDays, isoDay, parseWhen } from "./calendar/time.ts";
 import { CLEAR_TITLE, clean } from "./calendar/untrusted.ts";
+import type { Locations } from "./channel.ts";
 import { StateDoc } from "./docs.ts";
-import { LocationDoc } from "./location.ts";
 import type { Log } from "./log.ts";
 import { OwnerDoc } from "./owner.ts";
 import type { Fetch } from "./places.ts";
@@ -46,6 +46,7 @@ export type BriefOptions = {
   readonly userAgent: string;
   readonly log: Log;
   readonly calendar: CalendarOptions | undefined;
+  readonly locations: Locations | undefined;
 };
 
 export function nextBriefAt(after: number, time: string, zone: string): number {
@@ -95,9 +96,20 @@ async function weatherLine(options: BriefOptions, place: { latitude: number; lon
     const rain = first("precipitation_probability_max");
     if (typeof high !== "number" || typeof low !== "number") throw new Error("weather reply has no temperatures");
     const chance = typeof rain === "number" ? `, ${Math.round(rain)}% chance of rain` : "";
-    return `Weather where you last shared your location: ${Math.round(low)} to ${Math.round(high)} C${chance}.`;
+    return `Weather where you last were: ${Math.round(low)} to ${Math.round(high)} C${chance}.`;
   } catch (error) {
     options.log("brief_source_failed", { source: "weather", error: error instanceof Error ? error.name : "unknown" });
+    return undefined;
+  }
+}
+
+async function weatherHere(options: BriefOptions): Promise<string | undefined> {
+  if (!options.locations) return undefined;
+  try {
+    const place = await options.locations.current();
+    return place ? await weatherLine(options, place) : undefined;
+  } catch (error) {
+    options.log("brief_source_failed", { source: "location", error: error instanceof Error ? error.name : "unknown" });
     return undefined;
   }
 }
@@ -110,7 +122,6 @@ async function compose(options: BriefOptions, runtime: Runtime, context: Context
   const start = addDays(new Date(now), timeZone, 0);
   const end = addDays(new Date(now), timeZone, 1);
   const reminders = await runtime.snapshot(RemindersDoc, context);
-  const location = await runtime.snapshot(LocationDoc, context);
   const due = (reminders?.items ?? [])
     .filter((item) => item.at >= start.getTime() && item.at < end.getTime())
     .sort((a, b) => a.at - b.at)
@@ -118,7 +129,7 @@ async function compose(options: BriefOptions, runtime: Runtime, context: Context
   const lines = [
     await calendarLine(options, start, end),
     due.length > 0 ? `Reminders: ${due.join("; ")}.` : undefined,
-    location?.latest ? await weatherLine(options, location.latest) : undefined,
+    await weatherHere(options),
   ].filter((line) => line !== undefined);
   return ["Good morning.", ...(lines.length > 0 ? lines : ["Nothing scheduled today."])].join("\n");
 }

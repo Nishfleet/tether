@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import type { InboundAttachment } from "../src/channel.ts";
 import type { CalendarOptions } from "../src/calendar/tools.ts";
 import type { CalendarEvent } from "../src/calendar/types.ts";
 import { nextBriefAt, WEATHER_HOST } from "../src/brief.ts";
@@ -29,19 +28,7 @@ const calendarOf = (list: () => Promise<CalendarEvent[]>): CalendarOptions => ({
   backends: { calendar: [{ source: "google", list, create: async () => undefined }], contacts: [] },
 });
 
-const PIN = [
-  "BEGIN:VCARD",
-  "VERSION:3.0",
-  "FN:Current Location",
-  "item1.URL;type=pref:http://maps.apple.com/?ll=12.96890\\,77.58420&q=12.96890\\,77.58420&t=m",
-  "END:VCARD",
-  "",
-].join("\r\n");
-
-const pin = (id: string) => {
-  const attachment: InboundAttachment = { fileName: "Current Location.loc.vcf", mimeType: "text/vcard", size: PIN.length, read: async () => Buffer.from(PIN, "utf8") };
-  return inbound(id, undefined, { attachments: [attachment] });
-};
+const HERE = { current: async () => ({ latitude: 12.9689, longitude: 77.5842, label: null, at: Date.now() }), request: async () => true };
 
 const forecast = (seen: string[] = []) => async (url: string) => {
   seen.push(url);
@@ -91,7 +78,8 @@ describe("morning brief", () => {
 
   it("texts the calendar, reminders due today and weather at 08:00, then again the next day", opts, async () => {
     const seen: string[] = [];
-    rig.model.enqueue(say("Got your location."), call("reminder_set", { text: "call mum", at: "2026-10-24T10:00:00+05:30" }), say("Set."));
+    rig.model.enqueue(call("reminder_set", { text: "call mum", at: "2026-10-24T10:00:00+05:30" }), say("Set."));
+    rig.channel.locations = HERE;
     await boot({
       fetch: forecast(seen),
       calendar: calendarOf(async () => [
@@ -99,17 +87,15 @@ describe("morning brief", () => {
         event("Holiday", "2026-10-24T00:00:00+05:30", "2026-10-25T00:00:00+05:30", true),
       ]),
     });
-    rig.channel.push(pin("m1"));
+    rig.channel.push(inbound("m1", "remind me to call mum at 10"));
     await rig.channel.sentCount(1);
-    rig.channel.push(inbound("m2", "remind me to call mum at 10"));
-    await rig.channel.sentCount(2);
     await clock.advance(89 * MIN);
-    assert.equal(rig.texts().length, 2, "not before 08:00");
+    assert.equal(rig.texts().length, 1, "not before 08:00");
     await clock.advance(1 * MIN);
     await until(() => briefs().length === 1);
     assert.equal(
       briefs()[0],
-      "Good morning.\nCalendar: all day Holiday; 09:00 Standup.\nReminders: 10:00 call mum.\nWeather where you last shared your location: 22 to 31 C, 40% chance of rain.",
+      "Good morning.\nCalendar: all day Holiday; 09:00 Standup.\nReminders: 10:00 call mum.\nWeather where you last were: 22 to 31 C, 40% chance of rain.",
     );
     const url = new URL(seen[0] ?? "");
     assert.equal(url.host, WEATHER_HOST);
@@ -144,19 +130,20 @@ describe("morning brief", () => {
   });
 
   it("skips a source that is missing or failing and still sends the rest", opts, async () => {
+    rig.channel.locations = { current: () => Promise.reject(new Error("find my down")), request: async () => true };
     await boot({ calendar: calendarOf(() => Promise.reject(new Error("calendar down"))), fetch: forecast() });
     await greet();
     await clock.advance(90 * MIN);
     await until(() => briefs().length === 1);
     assert.equal(briefs()[0], "Good morning.\nNothing scheduled today.");
     assert.ok(rig.logs.some((entry) => entry.event === "brief_source_failed" && entry.fields.source === "google"));
+    assert.ok(rig.logs.some((entry) => entry.event === "brief_source_failed" && entry.fields.source === "location"));
   });
 
   it("skips weather when the lookup fails", opts, async () => {
-    rig.model.enqueue(say("Got your location."));
+    rig.channel.locations = HERE;
     await boot({ fetch: async () => new Response("no", { status: 500 }), calendar: calendarOf(async () => []) });
-    rig.channel.push(pin("m1"));
-    await rig.channel.sentCount(1);
+    await greet();
     await clock.advance(90 * MIN);
     await until(() => briefs().length === 1);
     assert.equal(briefs()[0], "Good morning.\nCalendar: nothing today.");

@@ -36,8 +36,7 @@ without the model. Text `RESUME` to continue.
   sender, every group chat and every non-text message is ignored and logged
   with the message id, the reason and a short salted hash of the sender (random
   salt, created once, 0600 in the state directory), never the content or the
-  handle. The one exception is a sent location from the allowed sender in a
-  direct chat (see Location).
+  handle.
 - **STOP and RESUME.** Decided in code before the model is involved, and only
   for the allowed sender. `STOP` records the stopped state durably, aborts the
   running model calls and queued sends, and replies `Stopped`. While stopped,
@@ -61,8 +60,10 @@ without the model. Text `RESUME` to continue.
   `reminder_list`, `reminder_cancel`, `brief_set`, `brief_off`, `location_request`, `location_last`,
   `places_nearby` and `text_owner`, plus the calendar and contacts tools when an
   account is connected (see Calendar and contacts) and its own computer when
-  configured (see Its own computer). Nothing else. Any tool that can act for Nish carries
-  `askFirst`; see Safety rules.
+  configured (see Its own computer), and `fleet_request` when configured (see
+  Fleet requests). Nothing else. Any tool that can act for Nish carries
+  `askFirst`, except `fleet_request`, which only asks Nish's own fleet for
+  work; see Safety rules.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
   model group once the context passes `contextWindow - 16384` tokens
@@ -149,47 +150,29 @@ Reminders live in Tether and arrive as iMessage texts.
 
 ## Morning brief
 
-Every day at 08:00 (`TETHER_TIMEZONE`) Tether texts one brief: today's calendar events, reminders due today, and the weather (Open-Meteo, no key) at the last shared location. A source that is not connected or fails is skipped. Text "brief at 7:30" or "stop the brief" (`brief_set`, `brief_off`) to change it.
+Every day at 08:00 (`TETHER_TIMEZONE`) Tether texts one brief: today's calendar events, reminders due today, and the weather (Open-Meteo, no key) where you last were (Find My). A source that is not connected or fails is skipped. Text "brief at 7:30" or "stop the brief" (`brief_set`, `brief_off`) to change it.
 It is one Pi Durable task (`tether.brief`) that sleeps until the next brief time, like a reminder, so a restart changes nothing. A brief more than 3 hours late is skipped, and nothing is sent while Tether is stopped.
 
 ## Location
 
-Tether never reads Find My or live sharing. The owner sends a one-off pin in the
-iMessage chat: **+, Location, Send Pin**. `location_request` texts that ask (one
-fixed sentence, sent through the same durable path) and `location_last` reads the
-saved spot back.
-
-A pin arrives as a file attachment, normally a `.loc.vcf` vCard holding a maps
-link with the coordinates. `src/spectrum.ts` lists the message's
-`attachmentMetadata` and reads a file lazily through the provider's
-`getAttachment`, so the vCard is not turned into a contact. Only after the
-sender check (the allowed handle, direct chat) does the app read the file, and
-only for `.vcf` files and vCard or location MIME types under 64 KB. It takes the
-coordinates from a map URL (`ll`, `sll`, `q`, `center`, `daddr`, `saddr`,
-`near`, or an `@lat,lon` path) or a `GEO` line, refuses numbers out of range,
-and saves the last location with a timestamp in the durable `tether.location`
-document. The model is then told `I shared my location: ...` as a normal turn.
-Every other attachment is still ignored. A vCard with no coordinates is logged
-as `attachment_unparsed` with its file name, MIME type and size, never its
-content, and the coordinates themselves are never logged.
-
-**What a real pin looked like (live, 2026-10-23).** The first real "Send Pin" from
-an iPhone did not arrive as a `.loc.vcf` file. Spectrum delivered it as an
-`unsupported-message` with no text and no attachment, so v0.5.2 ignored it. From
-0.5.3 the app also reads a map link (`maps.apple.com`, `maps.google.*`,
-`google.*/maps`, `maps.app.goo.gl`) found in the message text, the rich-link URL
-(`miniApp.url`), `nativeText` or `subject`, and treats it like a pin when the link
-holds coordinates. A message that is only a map link counts as a location, a
-sentence that contains one is still chat. A short `maps.app.goo.gl` link has no
-coordinates and cannot be expanded (the app makes no other web call), so it is
-not saved. For every non-text message the app logs which fields were present
-(names, lengths and flags, never content) as `inbound_content`, so the next real
-pin shows what Spectrum gave us. See `tests/location.test.ts` for the shapes the
-parser accepts.
+Tether reads the owner's location through Photon's Find My API, the `locations`
+resource of `@photon-ai/advanced-imessage` (2.3.0, pinned), because a pin sent
+from the iPhone arrives as an app balloon Spectrum cannot read (proved live
+2026-10-23). `src/findmy.ts` asks Spectrum's `cloud.issueImessageTokens` for a
+token, opens one gRPC client, and issues a new token only when a call fails as
+unauthenticated. `location_request` sends a Find My request card (the owner must
+tap Share, or Tether texts one fixed sentence if the card cannot be sent),
+`location_last` and `places_nearby` read the owner's current Find My location
+with its age, and answer nothing when the owner is not sharing. A map link pasted
+in chat is plain text: the model reads the coordinates itself. Nothing from Find
+My is stored, the address passed to Photon is the allowed sender's own handle, and
+the log (`findmy_current`) holds only whether a location was found, its type and
+age, never coordinates. The owner approved reading his live Find My location on
+2026-10-23.
 
 ## Nearby places
 
-`places_nearby` searches around the last shared location, or around a named
+`places_nearby` searches around the owner's Find My location, or around a named
 place (`near`, geocoded first). It is a free, read-only lookup with no key and
 no paid places API: Photon (`https://photon.komoot.io/api/`), a search over
 OpenStreetMap data. It is the only web host Tether calls. The URL is a constant
@@ -207,8 +190,7 @@ system prompt tells the model to treat it as data.
 
 | Rule | Enforced in code | Proof |
 | --- | --- | --- |
-| A shared location is accepted from the allowed sender in a direct chat only | yes, `classify` | `tests/location.test.ts`, `tests/assist.test.ts` (stranger, file never read) |
-| Only a vCard or location file under 64 KB is read | yes, `isLocationAttachment` | `tests/location.test.ts` |
+| Find My is read only for the allowed sender's own handle, never stored or logged with coordinates | yes, `createFindMy` takes the one owner address | `tests/findmy.test.ts` |
 | The lookup calls one fixed https host, with no redirects | yes, `PLACES_URL`, `redirect: "error"` | `tests/assist.test.ts`, `tests/location.test.ts` |
 | Reminders text only the owner's chat | yes, the space is saved from accepted messages only | `tests/assist.test.ts` |
 | STOP holds due reminders until RESUME | yes, `tether.reminder` checks the state in its sending commit and `RESUME` releases them | `tests/assist.test.ts`, `tests/reminder-crash.test.ts` |
@@ -269,6 +251,8 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 | `TETHER_STATE_DIR` | no | state directory; falls back to `STATE_DIRECTORY`, which systemd sets to `/var/lib/tether` |
 | `TETHER_SPACE_URL` | no | where its own Cua Space listens: `http://127.0.0.1:<port>`, the port Cua publishes for that Space (any other host or form is refused). With `TETHER_SPACE_TOKEN`, it decides: if either is unset, no computer tool exists |
 | `TETHER_SPACE_TOKEN` | no | the Space's own key (Cua's per-Space spacesd token). It opens that one Space and nothing else. Never logged |
+| `TETHER_TINCAN_CONFIG` | no | path to Tether's own Agent Tincan identity file (agent name `tether`). With `TETHER_TINCAN_BIN`, it decides: if either is unset, `fleet_request` does not exist |
+| `TETHER_TINCAN_BIN` | no | path to the stock `tincan` binary |
 
 State is one SQLite file, `tether.sqlite`, in the state directory.
 
@@ -422,6 +406,32 @@ Switch it off: remove `TETHER_SPACE_URL` and `TETHER_SPACE_TOKEN` from the env
 file and restart. No computer tool is then registered. Delete it: remove
 `src/computer*`, its tests and the `@trycua/cua` dependency, and ask the server
 to delete the Space.
+
+## Fleet requests
+
+`fleet_request(text)` in `src/fleet.ts` sends one fix or feature request from
+Nish to the fleet's `issue-desk` agent over Agent Tincan. `issue-desk` files an
+`agent-ready` issue in a product repo and answers with its link. Tether gets no
+GitHub access, shell or token: only one Agent Tincan identity, named `tether`.
+
+- The model calls it when Nish clearly asks for a change to a product. It does
+  not ask first: the request goes to Nish's own fleet, not to another person.
+  Only Nish's direct messages reach the model, and STOP halts it like any tool.
+- It makes one call to the stock client with an argument array, never a shell
+  string: `tincan ask issue-desk --json -- <text>`, with `TINCAN_CONFIG` set to
+  `TETHER_TINCAN_CONFIG`. The client waits up to its built-in 20 seconds; Tether
+  kills the client at 30 seconds. An answer in time comes back as one line, the
+  issue link. No answer in time gives `Sent to the fleet, request <id>`, and
+  Tether stops there. If Tether's own 30-second kill fires with no answer, the
+  owner hears that the request may still have been sent, so it is never reported
+  as simply lost. A refusal, a client error or an answer it cannot read gives
+  `The fleet request failed: <reason>`.
+
+Setup: the identity file and the `tincan` binary for the service user come from
+`fleet-ops`, not this repo. Switch it off: unset `TETHER_TINCAN_CONFIG` in
+`/etc/tether/tether.env` and restart. No fleet tool is then registered. Delete
+it: remove `src/fleet.ts`, `tests/fleet.test.ts`, the `fleet_request` wiring in
+`src/main.ts`, and the `TincanConfig` lines in `src/config.ts`.
 
 ## Safety rules
 

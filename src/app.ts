@@ -16,11 +16,10 @@ import { answer, cancelAll, createApprovalExtension, hasAsked, Wakeups, type Any
 import { createAssistExtension } from "./assist.ts";
 import { createBriefTask, startBrief } from "./brief.ts";
 import { createCalendarExtension, type CalendarOptions } from "./calendar/tools.ts";
-import type { Channel, Inbound, InboundAttachment } from "./channel.ts";
+import type { Channel, Inbound } from "./channel.ts";
 import { DEFAULT_TIME_ZONE } from "./clock.ts";
 import { classify } from "./control.ts";
 import { type Pending, SEEN_LIMIT, StateDoc } from "./docs.ts";
-import { LocationDoc, locationPrompt, parseLocation } from "./location.ts";
 import type { Log } from "./log.ts";
 import { createMemoryExtension } from "./memory.ts";
 import { rememberSpace } from "./owner.ts";
@@ -91,7 +90,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
   const registry = createRegistry();
   const timeZone = options.timeZone ?? DEFAULT_TIME_ZONE;
   const fetcher = options.fetch ?? fetch;
-  const brief = createBriefTask({ reply: task, timeZone, fetch: fetcher, userAgent: USER_AGENT, log, calendar: options.calendar });
+  const brief = createBriefTask({ reply: task, timeZone, fetch: fetcher, userAgent: USER_AGENT, log, calendar: options.calendar, locations: channel.locations });
   registry.install(createMemoryExtension([task]));
   registry.install(createAssistExtension({ channel, reply: task, timeZone, fetch: fetcher, userAgent: USER_AGENT, log, brief }));
   if (options.calendar) registry.install(createCalendarExtension(options.calendar));
@@ -145,33 +144,6 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
       await queue(tx, reply(item));
       return "accepted";
     }, context);
-
-  const onLocation = async (message: Inbound, attachment: InboundAttachment) => {
-    const body = await attachment.read().then(
-      (bytes) => bytes.toString("utf8"),
-      (error: unknown) => {
-        log("attachment_unreadable", { id: message.id, error: error instanceof Error ? error.name : "unknown" });
-        return undefined;
-      },
-    );
-    if (body === undefined) return "unreadable";
-    const where = parseLocation(body);
-    if (!where) {
-      log("attachment_unparsed", { id: message.id, fileName: attachment.fileName, mimeType: attachment.mimeType, size: attachment.size });
-      return "not_location";
-    }
-    return root.commit(async (tx) => {
-      const state = await tx.doc(StateDoc);
-      if (!claim(state, message.id)) return "duplicate";
-      if (state.stopped) return "stopped";
-      const item: Pending = { inbound: message.id, space: message.space, prompt: locationPrompt(where), run: 0 };
-      state.inflight.push(item);
-      (await tx.doc(LocationDoc)).latest = { ...where, at: Date.now() };
-      await rememberSpace(tx, message.space);
-      await queue(tx, reply(item));
-      return "accepted";
-    }, context);
-  };
 
   const onStop = async (message: Inbound) => {
     const outcome = await root.commit(async (tx) => {
@@ -230,7 +202,6 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
     let outcome: string;
     if (verdict.kind === "stop") outcome = await onStop(message);
     else if (verdict.kind === "resume") outcome = await onResume(message);
-    else if (verdict.kind === "location") outcome = await onLocation(message, verdict.attachment);
     else if (verdict.kind === "yes" || verdict.kind === "no") {
       outcome = await onAnswer(message, verdict.kind === "yes");
       if (outcome === "none") outcome = await onChat(message, verdict.text);
