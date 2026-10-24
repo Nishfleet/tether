@@ -15,6 +15,7 @@ import { text } from "./tool.ts";
 
 export type Brief = {
   time: string | null;
+  at: number | null;
   gen: number;
 };
 
@@ -35,7 +36,7 @@ export const BriefDoc = defineDoc<Brief>({
   kind: "tether.brief.settings",
   version: 1,
   scope: "session",
-  initial: () => ({ time: DEFAULT_BRIEF_TIME, gen: 0 }),
+  initial: () => ({ time: DEFAULT_BRIEF_TIME, at: null, gen: 0 }),
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
 });
 
@@ -86,7 +87,7 @@ async function calendarLine(options: BriefOptions, from: Date, to: Date): Promis
     return [];
   });
   if (settled.every((outcome) => outcome.status === "rejected")) return undefined;
-  if (events.length === 0) return "Calendar: nothing today.";
+  if (events.length === 0) return settled.some((outcome) => outcome.status === "rejected") ? undefined : "Calendar: nothing today.";
   const items = dedupe(events).map((event) => `${event.allDay ? "all day" : clock(event.start.getTime(), options.timeZone)} ${clean(event.title, CLEAR_TITLE)}`);
   return `Calendar: ${items.join("; ")}.`;
 }
@@ -171,14 +172,23 @@ export function createBriefTask(options: BriefOptions): BriefTask {
         }
         const owner = await runtime.snapshot(OwnerDoc, context);
         const stopped = (await runtime.snapshot(StateDoc, context))?.stopped === true;
-        let reason = runtime.now() - at > LATE_MS ? "late" : owner?.space == null ? "no_space" : stopped ? "stopped" : undefined;
-        const body = reason === undefined ? await compose(options, runtime, context) : undefined;
+        const skip = runtime.now() - at > LATE_MS ? "late" : owner?.space == null ? "no_space" : stopped ? "stopped" : undefined;
+        const body =
+          skip === undefined
+            ? await compose(options, runtime, context).catch((error: unknown) => {
+                log("brief_failed", { error: error instanceof Error ? error.name : "unknown" });
+                return "Good morning. I could not put the brief together today.";
+              })
+            : undefined;
         let sent = false;
+        let reason = skip;
         await runtime.commit(async (tx) => {
+          sent = false;
+          reason = skip;
           const brief = await tx.doc(BriefDoc);
           if (brief.gen !== gen || brief.time === null) return { status: "terminal", outcome: { status: "aborted", reason: "superseded" } };
           const space = (await tx.doc(OwnerDoc)).space;
-          if (body === undefined) reason ??= "late";
+          if (body === undefined) reason = skip ?? "late";
           else if (space === null) reason = "no_space";
           else if ((await tx.doc(StateDoc)).stopped) reason = "stopped";
           else {
@@ -187,6 +197,7 @@ export function createBriefTask(options: BriefOptions): BriefTask {
             sent = true;
           }
           const until = nextBriefAt(runtime.now(), brief.time, timeZone);
+          brief.at = until;
           return { status: "sleeping", until, checkpoint: { phase: "wait", at: until } };
         }, context);
         if (sent) log("brief_sent", { due: at });
@@ -199,17 +210,19 @@ export function createBriefTask(options: BriefOptions): BriefTask {
   });
 }
 
-async function schedule(tx: Tx, task: BriefTask, conversationId: ConversationId, now: number, timeZone: string, time: string | null): Promise<void> {
+async function schedule(tx: Tx, task: BriefTask, conversationId: ConversationId, now: number, timeZone: string, time: string | null, wakeAt?: number): Promise<void> {
   const brief = await tx.doc(BriefDoc);
   brief.time = time;
   brief.gen += 1;
-  if (time === null) return;
-  await tx.createTask(task, { gen: brief.gen, at: nextBriefAt(now, time, timeZone) }, { ownership: { kind: "conversation" }, conversationId, background: true });
+  brief.at = time === null ? null : (wakeAt ?? nextBriefAt(now, time, timeZone));
+  if (brief.at === null) return;
+  await tx.createTask(task, { gen: brief.gen, at: brief.at }, { ownership: { kind: "conversation" }, conversationId, background: true });
 }
 
 export async function startBrief(tx: Tx, task: BriefTask, conversationId: ConversationId, now: number, timeZone: string): Promise<void> {
   const brief = await tx.doc(BriefDoc);
-  if (brief.gen === 0) await schedule(tx, task, conversationId, now, timeZone, brief.time);
+  if (brief.time === null) return;
+  await schedule(tx, task, conversationId, now, timeZone, brief.time, brief.at ?? undefined);
 }
 
 export function briefTools(options: { task: BriefTask; timeZone: string }) {
@@ -223,7 +236,7 @@ export function briefTools(options: { task: BriefTask; timeZone: string }) {
     execute: async (args, api, context) => {
       const at = api.now();
       await api.commit((tx) => schedule(tx, task, api.conversationId, at, timeZone, args.time), context);
-      return text(`The brief will come every day at ${args.time} (${timeZone}).`);
+      return text(`The brief will come every day at ${args.time}, your time.`);
     },
   });
 
@@ -246,7 +259,7 @@ export function briefTools(options: { task: BriefTask; timeZone: string }) {
     execute: async (_args, api, context) => {
       const brief = await api.snapshot(BriefDoc, context);
       if (!brief || brief.time === null) return text("The morning brief is off.");
-      return text(`The morning brief comes every day at ${brief.time} (${timeZone}).`);
+      return text(`The morning brief comes every day at ${brief.time}, your time.`);
     },
   });
 

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import type { CalendarOptions } from "../src/calendar/tools.ts";
 import type { CalendarEvent } from "../src/calendar/types.ts";
 import { nextBriefAt, WEATHER_HOST } from "../src/brief.ts";
-import { STOPPED_TEXT } from "../src/app.ts";
+import { RESUMED_TEXT, STOPPED_TEXT } from "../src/app.ts";
 import { FakeClock } from "./clock.ts";
 import { FakeChannel, call, inbound, say } from "./helpers.ts";
 import { Rig } from "./rig.ts";
@@ -70,8 +70,10 @@ describe("morning brief", () => {
   const restart = async (down: number, extra: Parameters<Rig["boot"]>[0] = {}) => {
     await rig.tether?.stop();
     const before = [...rig.channel.sent];
+    const places = rig.channel.locations;
     rig.channel = new FakeChannel();
     rig.channel.sent.push(...before);
+    rig.channel.locations = places;
     await clock.restart(down);
     await boot(extra);
   };
@@ -250,5 +252,9 @@ describe("morning brief", () => {
     assert.deepEqual(briefs(), []);
     assert.equal(lookups, 0, "no weather lookup while stopped");
     assert.ok(rig.logs.some((entry) => entry.event === "brief_skipped" && entry.fields.reason === "stopped"));
+    rig.channel.push(inbound("m2", "RESUME"));
+    await until(() => rig.texts().includes(RESUMED_TEXT));
+    await clock.advance(24 * 60 * MIN);
+    await until(() => briefs().length === 1);
   });
 });

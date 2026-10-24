@@ -20,9 +20,13 @@ export class FakeClock {
 
   async advance(ms: number): Promise<void> {
     this.time += ms;
-    const due = this.timers.filter((timer) => timer.at <= this.time).sort((a, b) => a.at - b.at);
-    this.timers = this.timers.filter((timer) => timer.at > this.time);
-    for (const timer of due) timer.callback();
+    for (;;) {
+      const due = this.timers.filter((timer) => timer.at <= this.time).sort((a, b) => a.at - b.at);
+      if (due.length === 0) break;
+      this.timers = this.timers.filter((timer) => timer.at > this.time);
+      for (const timer of due) timer.callback();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
 
