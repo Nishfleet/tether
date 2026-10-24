@@ -36,8 +36,7 @@ without the model. Text `RESUME` to continue.
   sender, every group chat and every non-text message is ignored and logged
   with the message id, the reason and a short salted hash of the sender (random
   salt, created once, 0600 in the state directory), never the content or the
-  handle. The one exception is a sent location from the allowed sender in a
-  direct chat (see Location).
+  handle.
 - **STOP and RESUME.** Decided in code before the model is involved, and only
   for the allowed sender. `STOP` records the stopped state durably, aborts the
   running model calls and queued sends, and replies `Stopped`. While stopped,
@@ -149,64 +148,24 @@ Reminders live in Tether and arrive as iMessage texts.
 
 ## Location
 
-**Find My, the main route (0.7.1).** A pin sent from the iPhone Location button
-reaches Tether as an iMessage app balloon whose payload Spectrum does not expose
-(proved live on 2026-10-23, see below), so Tether reads the owner's location
-through Photon's own Find My API instead, the `locations` resource of
-`@photon-ai/advanced-imessage` (2.3.0, pinned). Spectrum 12.13.0 and its newest
-release 12.14.0 do not expose it, and Photon's docs name this package as the one
-for features Spectrum lacks, so `src/findmy.ts` is only an adapter: it asks
-Spectrum's public `cloud.issueImessageTokens` for the line's token, opens one
-gRPC client, renews it at 80 percent of its life, and calls `locations.get` for
-the allowed sender's handle and `locations.request` for the request card. The
-owner approved reading his live Find My location on 2026-10-23.
-
-- `location_request` sends a Find My request card in the owner's chat. The owner
-  must tap Share. The request does not grant anything by itself. If the card
-  cannot be sent, Tether texts one fixed sentence instead.
-- `location_last` and `places_nearby` use the newest of the Find My location and
-  the last saved pin, and say which one it was and how old. If the owner is not
-  sharing, Find My answers nothing and the saved pin or the named place is used.
-- Nothing from Find My is stored. The log says `findmy_current` with whether a
-  location was found, its type and age, and never the coordinates.
-- The address passed to Photon is the allowed sender's handle with spaces and
-  punctuation removed (`+` and digits for a phone number).
-
-**Pins and map links, the fallback.** The owner can still send a one-off pin.
-`location_request` no longer asks for it.
-
-A pin arrives as a file attachment, normally a `.loc.vcf` vCard holding a maps
-link with the coordinates. `src/spectrum.ts` lists the message's
-`attachmentMetadata` and reads a file lazily through the provider's
-`getAttachment`, so the vCard is not turned into a contact. Only after the
-sender check (the allowed handle, direct chat) does the app read the file, and
-only for `.vcf` files and vCard or location MIME types under 64 KB. It takes the
-coordinates from a map URL (`ll`, `sll`, `q`, `center`, `daddr`, `saddr`,
-`near`, or an `@lat,lon` path) or a `GEO` line, refuses numbers out of range,
-and saves the last location with a timestamp in the durable `tether.location`
-document. The model is then told `I shared my location: ...` as a normal turn.
-Every other attachment is still ignored. A vCard with no coordinates is logged
-as `attachment_unparsed` with its file name, MIME type and size, never its
-content, and the coordinates themselves are never logged.
-
-**What a real pin looked like (live, 2026-10-23).** The first real "Send Pin" from
-an iPhone did not arrive as a `.loc.vcf` file. Later pins arrived as app balloons
-(the Google Maps iMessage extension and the Find My app) with no readable payload. Spectrum delivered it as an
-`unsupported-message` with no text and no attachment, so v0.5.2 ignored it. From
-0.5.3 the app also reads a map link (`maps.apple.com`, `maps.google.*`,
-`google.*/maps`, `maps.app.goo.gl`) found in the message text, the rich-link URL
-(`miniApp.url`), `nativeText` or `subject`, and treats it like a pin when the link
-holds coordinates. A message that is only a map link counts as a location, a
-sentence that contains one is still chat. A short `maps.app.goo.gl` link has no
-coordinates and cannot be expanded (the app makes no other web call), so it is
-not saved. For every non-text message the app logs which fields were present
-(names, lengths and flags, never content) as `inbound_content`, so the next real
-pin shows what Spectrum gave us. See `tests/location.test.ts` for the shapes the
-parser accepts.
+Tether reads the owner's location through Photon's Find My API, the `locations`
+resource of `@photon-ai/advanced-imessage` (2.3.0, pinned), because a pin sent
+from the iPhone arrives as an app balloon Spectrum cannot read (proved live
+2026-10-23). `src/findmy.ts` asks Spectrum's `cloud.issueImessageTokens` for a
+token, opens one gRPC client, and issues a new token only when a call fails as
+unauthenticated. `location_request` sends a Find My request card (the owner must
+tap Share, or Tether texts one fixed sentence if the card cannot be sent),
+`location_last` and `places_nearby` read the owner's current Find My location
+with its age, and answer nothing when the owner is not sharing. A map link pasted
+in chat is plain text: the model reads the coordinates itself. Nothing from Find
+My is stored, the address passed to Photon is the allowed sender's own handle, and
+the log (`findmy_current`) holds only whether a location was found, its type and
+age, never coordinates. The owner approved reading his live Find My location on
+2026-10-23.
 
 ## Nearby places
 
-`places_nearby` searches around the last shared location, or around a named
+`places_nearby` searches around the owner's Find My location, or around a named
 place (`near`, geocoded first). It is a free, read-only lookup with no key and
 no paid places API: Photon (`https://photon.komoot.io/api/`), a search over
 OpenStreetMap data. It is the only web host Tether calls. The URL is a constant
@@ -224,8 +183,6 @@ system prompt tells the model to treat it as data.
 
 | Rule | Enforced in code | Proof |
 | --- | --- | --- |
-| A shared location is accepted from the allowed sender in a direct chat only | yes, `classify` | `tests/location.test.ts`, `tests/assist.test.ts` (stranger, file never read) |
-| Only a vCard or location file under 64 KB is read | yes, `isLocationAttachment` | `tests/location.test.ts` |
 | Find My is read only for the allowed sender's own handle, never stored or logged with coordinates | yes, `createFindMy` takes the one owner address | `tests/findmy.test.ts` |
 | The lookup calls one fixed https host, with no redirects | yes, `PLACES_URL`, `redirect: "error"` | `tests/assist.test.ts`, `tests/location.test.ts` |
 | Reminders text only the owner's chat | yes, the space is saved from accepted messages only | `tests/assist.test.ts` |

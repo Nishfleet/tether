@@ -1,17 +1,9 @@
-export type InboundAttachment = {
-  readonly fileName: string;
-  readonly mimeType: string;
-  readonly size: number;
-  read(): Promise<Buffer>;
-};
-
 export type Inbound = {
   readonly id: string;
   readonly sender: string;
   readonly space: string;
   readonly direct: boolean;
   readonly text: string | undefined;
-  readonly attachments?: readonly InboundAttachment[];
 };
 
 export type LiveLocation = {

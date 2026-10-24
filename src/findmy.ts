@@ -1,4 +1,4 @@
-import { type AdvancedIMessage, createGrpcClient } from "@photon-ai/advanced-imessage/grpc";
+import { type AdvancedIMessage, AuthenticationError, createGrpcClient } from "@photon-ai/advanced-imessage/grpc";
 import { cloud } from "spectrum-ts";
 import type { LiveLocation, Locations } from "./channel.ts";
 import { cleanLabel } from "./location.ts";
@@ -14,8 +14,6 @@ export type FindMyDeps = {
 };
 
 export const SHARED_ADDRESS = "imessage.spectrum.photon.codes:443";
-export const TOKEN_SHARE = 0.8;
-export const MIN_TOKEN_MS = 5000;
 
 export const photonDeps = (): FindMyDeps => ({
   issue: (projectId, projectSecret) => cloud.issueImessageTokens(projectId, projectSecret),
@@ -31,8 +29,6 @@ function target(data: Issued, sharedAddress: string): { address: string; token: 
   return { address: `${instance[0]}.imsg.photon.codes:443`, token: instance[1] };
 }
 
-type Session = { readonly client: AdvancedIMessage; readonly until: number; busy: number; retired: boolean };
-
 export type FindMyOptions = {
   readonly projectId: string;
   readonly projectSecret: string;
@@ -44,43 +40,33 @@ export type FindMyOptions = {
 export function createFindMy(options: FindMyOptions): Locations & { close(): Promise<void> } {
   const { projectId, projectSecret, owner, log } = options;
   const deps = options.deps ?? photonDeps();
-  let session: Session | undefined;
-  let renewing: Promise<Session> | undefined;
+  let client: Promise<AdvancedIMessage> | undefined;
   let closed = false;
 
-  const release = async (held: Session): Promise<void> => {
-    if (held.retired && held.busy === 0) await held.client.close().catch(() => undefined);
+  const connect = (): Promise<AdvancedIMessage> => {
+    client ??= deps.issue(projectId, projectSecret).then((data) => {
+      if (closed) throw new Error("closed");
+      const { address, token } = target(data, deps.sharedAddress);
+      return deps.open(address, token);
+    });
+    const opening = client;
+    opening.catch(() => {
+      if (client === opening) client = undefined;
+    });
+    return opening;
   };
 
-  const renew = async (): Promise<Session> => {
-    const data = await deps.issue(projectId, projectSecret);
-    if (closed) throw new Error("closed");
-    const now = deps.now();
-    const { address, token } = target(data, deps.sharedAddress);
-    const previous = session;
-    session = { client: deps.open(address, token), until: now + Math.max(MIN_TOKEN_MS, data.expiresIn * 1000 * TOKEN_SHARE), busy: 0, retired: false };
-    if (previous) {
-      previous.retired = true;
-      await release(previous);
-    }
-    return session;
-  };
-
+  // A call refused as unauthenticated holds an expired token: drop the client, issue a new token, and try once more.
   const lease = async <T>(use: (client: AdvancedIMessage) => Promise<T>): Promise<T> => {
     if (closed) throw new Error("closed");
-    let held = session;
-    if (!held || deps.now() >= held.until) {
-      renewing ??= renew().finally(() => {
-        renewing = undefined;
-      });
-      held = await renewing;
-    }
-    held.busy += 1;
+    const first = connect();
     try {
-      return await use(held.client);
-    } finally {
-      held.busy -= 1;
-      await release(held);
+      return await use(await first);
+    } catch (error) {
+      if (closed || !(error instanceof AuthenticationError)) throw error;
+      if (client === first) client = undefined;
+      await first.then((old) => old.close()).catch(() => undefined);
+      return use(await connect());
     }
   };
 
@@ -116,12 +102,10 @@ export function createFindMy(options: FindMyOptions): Locations & { close(): Pro
     },
     close: async () => {
       closed = true;
-      const open = session;
-      session = undefined;
-      if (open) {
-        open.retired = true;
-        await release(open);
-      }
+      const open = client;
+      client = undefined;
+      // A token still being issued is not waited for: connect() refuses to open a client once closed.
+      void open?.then((old) => old.close()).catch(() => undefined);
     },
   };
 }

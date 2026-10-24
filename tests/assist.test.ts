@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import type { InboundAttachment } from "../src/channel.ts";
 import { ASK_TEXT } from "../src/location.ts";
 import { PLACES_HOST, PLACES_URL } from "../src/places.ts";
 import { REMINDER_PREFIX } from "../src/reminders.ts";
@@ -10,29 +9,7 @@ import { Rig } from "./rig.ts";
 
 const opts = { timeout: 30000 };
 
-const LOC_VCF = [
-  "BEGIN:VCARD",
-  "VERSION:3.0",
-  "N:;Current Location;;;",
-  "FN:Current Location",
-  "item1.URL;type=pref:http://maps.apple.com/?ll=12.96890\\,77.58420&q=12.96890\\,77.58420&t=m",
-  "item1.X-ABLabel:map url",
-  "END:VCARD",
-  "",
-].join("\r\n");
-
-const attachment = (fileName: string, mimeType: string, body: string, onRead?: () => void): InboundAttachment => ({
-  fileName,
-  mimeType,
-  size: body.length,
-  read: async () => {
-    onRead?.();
-    return Buffer.from(body, "utf8");
-  },
-});
-
-const pin = (id: string, body = LOC_VCF, onRead?: () => void) =>
-  inbound(id, undefined, { attachments: [attachment("Current Location.loc.vcf", "text/vcard", body, onRead)] });
+const here = { current: async () => ({ latitude: 12.9689, longitude: 77.5842, label: "Current Location", at: Date.now() }), request: async () => true };
 
 type Seen = { url: string; init: { headers: Record<string, string>; redirect: string } };
 
@@ -187,66 +164,36 @@ describe("location and nearby places", () => {
     assert.equal(new URL(seen[0]?.url ?? "").searchParams.get("lat"), "12.9689");
   });
 
-  it("prefers the newer of a Find My location and a saved pin, and falls back to the pin when Find My has nothing", opts, async () => {
-    rig.channel.locations = { current: async () => ({ latitude: 1, longitude: 2, label: null, at: Date.now() - 3_600_000 }), request: async () => true };
-    rig.model.enqueue(say("Got it."), call("location_last", {}), say("Seen."));
+  it("reads the Find My location with its age", opts, async () => {
+    rig.channel.locations = here;
+    rig.model.enqueue(call("location_last", {}), say("Seen."));
     await rig.boot();
-    rig.channel.push(pin("m1"));
+    rig.channel.push(inbound("m1", "where am I"));
     await rig.channel.sentCount(1);
-    rig.channel.push(inbound("m2", "where am I"));
-    await rig.channel.sentCount(2);
-    assert.match(flatten(rig.model.requests.at(-1) as never), /12\.96890, 77\.58420 \(Current Location\) \(shared pin\)/);
+    assert.match(flatten(rig.model.requests.at(-1) as never), /12\.96890, 77\.58420 \(Current Location\), (just now|\d+ min ago)/);
   });
 
-  it("saves a location from the allowed sender, tells the model, and reads it back", opts, async () => {
-    rig.model.enqueue(say("Got your location."), call("location_last", {}), say("Last seen."));
+  it("says so when nobody is sharing a location", opts, async () => {
+    rig.channel.locations = { current: async () => undefined, request: async () => true };
+    rig.model.enqueue(call("location_last", {}), say("Nothing."));
     await rig.boot();
-    rig.channel.push(pin("m1"));
+    rig.channel.push(inbound("m1", "where am I"));
     await rig.channel.sentCount(1);
-    assert.match(flatten(rig.model.requests[0] as never), /I shared my location: 12\.96890, 77\.58420 \(Current Location\)/);
-    rig.channel.push(inbound("m2", "where was I"));
-    await rig.channel.sentCount(2);
-    assert.match(flatten(rig.model.requests.at(-1) as never), /12\.96890, 77\.58420 \(Current Location\) \(shared pin\), (just now|\d+ min ago)/);
-  });
-
-  it("ignores a location from a stranger and never reads the file", opts, async () => {
-    let reads = 0;
-    await rig.boot();
-    rig.channel.push({ ...pin("m1", LOC_VCF, () => (reads += 1)), sender: "stranger@example.test" });
-    rig.model.enqueue(say("hello"));
-    rig.channel.push(inbound("m2", "hi"));
-    await rig.channel.sentCount(1);
-    assert.equal(reads, 0);
-    assert.equal(rig.model.requests.length, 1);
-    assert.doesNotMatch(flatten(rig.model.requests[0] as never), /12\.96890/);
-  });
-
-  it("ignores other attachments and logs a vcard it cannot place", opts, async () => {
-    let reads = 0;
-    await rig.boot();
-    rig.channel.push(inbound("m1", undefined, { attachments: [attachment("photo.jpg", "image/jpeg", "xx", () => (reads += 1))] }));
-    rig.channel.push(pin("m2", "BEGIN:VCARD\r\nFN:Some Person\r\nTEL:000\r\nEND:VCARD\r\n"));
-    await rig.logged("attachment_unparsed");
-    assert.equal(reads, 0);
-    assert.equal(rig.model.requests.length, 0);
-    assert.deepEqual(rig.texts(), []);
-    const entry = rig.logs.find((log) => log.event === "attachment_unparsed");
-    assert.deepEqual(Object.keys(entry?.fields ?? {}).sort(), ["fileName", "id", "mimeType", "size"]);
+    assert.match(flatten(rig.model.requests.at(-1) as never), /No location yet/);
   });
 
   it("answers 'coffee near me' with real-looking places sorted by distance, through the one lookup host", opts, async () => {
     const seen: Seen[] = [];
-    rig.model.enqueue(say("Got it."), call("places_nearby", { query: "coffee" }), say("Here are some."));
+    rig.channel.locations = here;
+    rig.model.enqueue(call("places_nearby", { query: "coffee" }), say("Here are some."));
     await rig.boot({
       fetch: photon(
         [feature("Far Coffee", 12.975, 77.5842), feature("Near Coffee", 12.9692, 77.5843), feature("Too Far Coffee", 13.5, 77.9), feature("Near Coffee", 12.9692, 77.5843)],
         seen,
       ),
     });
-    rig.channel.push(pin("m1"));
+    rig.channel.push(inbound("m1", "coffee near me"));
     await rig.channel.sentCount(1);
-    rig.channel.push(inbound("m2", "coffee near me"));
-    await rig.channel.sentCount(2);
     const toolResult = flatten(rig.model.requests.at(-1) as never);
     assert.match(toolResult, /2 result\(s\) for \\"coffee\\"/);
     assert.ok(toolResult.indexOf("Near Coffee") < toolResult.indexOf("Far Coffee"));
@@ -295,27 +242,16 @@ describe("location and nearby places", () => {
     assert.match(flatten(rig.model.requests[1] as never), /Could not find a place called Nowhereville/);
   });
 
-  it("survives a malformed vcard from the owner and keeps answering", opts, async () => {
-    rig.model.enqueue(say("still here"));
-    await rig.boot();
-    rig.channel.push(pin("m1", "BEGIN:VCARD\r\nURL:http://maps.apple.com/%\r\nEND:VCARD\r\n"));
-    await rig.logged("attachment_unparsed");
-    rig.channel.push(inbound("m2", "hello"));
-    await rig.channel.sentCount(1);
-    assert.deepEqual(rig.texts(), ["still here"]);
-  });
-
   it("reports a failed lookup to the model without crashing", opts, async () => {
-    rig.model.enqueue(say("Saved."), call("places_nearby", { query: "coffee" }), say("Lookup failed, sorry."));
+    rig.channel.locations = here;
+    rig.model.enqueue(call("places_nearby", { query: "coffee" }), say("Lookup failed, sorry."));
     await rig.boot({
       fetch: async () => {
         throw new Error("network down");
       },
     });
-    rig.channel.push(pin("m1"));
+    rig.channel.push(inbound("m1", "coffee near me"));
     await rig.channel.sentCount(1);
-    rig.channel.push(inbound("m2", "coffee near me"));
-    await rig.channel.sentCount(2);
     assert.match(flatten(rig.model.requests.at(-1) as never), /places lookup failed/i);
     assert.ok(rig.logs.some((entry) => entry.event === "places_failed"));
   });
