@@ -7,7 +7,7 @@ the VPS as `tether-agent.service`. The unit, the service user, the firewall rule
 and the host config belong to `Nishfleet/fleet-ops`; this repo is the app.
 
 It answers only its owner, uses its tools and connected accounts freely, and
-asks first only before it messages someone else. No tool can move money.
+asks first only before it messages someone else. No tool moves money.
 
 ## What it does
 

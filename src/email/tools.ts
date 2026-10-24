@@ -12,6 +12,9 @@ const EMAIL = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;
 const NEWLINE = /\r|\n/;
 const SUBJECT_CHARS = 200;
 const BODY_CHARS = 20000;
+const HEADER_CHARS = 60;
+const TITLE_CHARS = 120;
+const NAME_CHARS = 80;
 
 const stamp = (date: Date | undefined, timezone: string) =>
   date
@@ -38,12 +41,15 @@ function check(email: { to: string; subject: string; body: string }): string | u
   return undefined;
 }
 
-const oneLine = (value: string) => value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}<>]/gu, " ").replace(/\s+/g, " ").trim();
+const oneLine = (value: string, limit: number) => {
+  const flat = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}<>]/gu, " ").replace(/\s+/g, " ").trim();
+  return flat.length > limit ? `${flat.slice(0, limit)}...` : flat;
+};
 
 const summaryLine = (email: EmailSummary, timezone: string) =>
-  `[${email.id}] ${stamp(email.date, timezone)} | from ${oneLine(email.from)} | ${oneLine(email.subject)} | ${oneLine(email.snippet)}`;
+  `[${email.id}] ${stamp(email.date, timezone)} | from ${oneLine(email.from, HEADER_CHARS)} | ${oneLine(email.subject, TITLE_CHARS)} | ${oneLine(email.snippet, TITLE_CHARS)}`;
 
-const messageLine = (label: string, value: string) => `${label}: ${oneLine(value) || "none"}`;
+const messageLine = (label: string, value: string, limit: number) => `${label}: ${oneLine(value, limit) || "none"}`;
 
 export function createEmailExtension(options: EmailOptions): Extension {
   const { backend, timezone } = options;
@@ -77,7 +83,7 @@ export function createEmailExtension(options: EmailOptions): Extension {
       } catch (error) {
         return fail("The email could not be read", error);
       }
-      const head = [messageLine("From", email.from), messageLine("To", email.to), messageLine("Subject", email.subject), `Date: ${stamp(email.date, timezone)}`];
+      const head = [messageLine("From", email.from, HEADER_CHARS), messageLine("To", email.to, HEADER_CHARS), messageLine("Subject", email.subject, TITLE_CHARS), `Date: ${stamp(email.date, timezone)}`];
       const body = email.body.length > BODY_CHARS ? `${email.body.slice(0, BODY_CHARS)}...` : email.body;
       return text([...head, body].join("\n"));
     },
@@ -100,7 +106,7 @@ export function createEmailExtension(options: EmailOptions): Extension {
       } catch (error) {
         return fail("The draft was not saved", error);
       }
-      return text(`Draft saved in Gmail: to ${oneLine(args.to)} — ${oneLine(args.subject)}`);
+      return text(`Draft saved in Gmail: to ${oneLine(args.to, HEADER_CHARS)} — ${oneLine(args.subject, TITLE_CHARS)}`);
     },
   });
 
@@ -122,12 +128,12 @@ export function createEmailExtension(options: EmailOptions): Extension {
         } catch (error) {
           return fail("The email was not sent", error);
         }
-        return text(`Sent to ${oneLine(args.to)}: ${oneLine(args.subject)}`);
+        return text(`Sent to ${oneLine(args.to, HEADER_CHARS)}: ${oneLine(args.subject, TITLE_CHARS)}`);
       },
     }),
     {
       askFirst: (args: { to: string; subject: string }) =>
-        `Send an email from your Gmail to ${oneLine(args.to)} — ${oneLine(args.subject)}.`,
+        `Send an email from your Gmail to ${oneLine(args.to, NAME_CHARS)} — ${oneLine(args.subject, TITLE_CHARS)}.`,
     },
   );
 

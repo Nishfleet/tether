@@ -252,6 +252,15 @@ describe("tether app, in process", () => {
     assert.deepEqual(memory.sort(), ["n1: note B", "n5f3a9c1e: an older note"]);
   });
 
+  it("does not reuse an id after a note is forgotten", opts, async () => {
+    model.enqueue(call("memory_save", { note: "likes tea" }), call("memory_forget", { id: "n1" }), call("memory_save", { note: "likes coffee" }), say("done"));
+    await boot();
+    channel.push(inbound("m1", "change my drink note"));
+    await channel.sentCount(1);
+    const results = JSON.stringify(model.requests.at(-1)?.messages);
+    assert.match(results, /Saved as n2/);
+  });
+
   it("does not re-ask an exhausted send after RESUME", opts, async () => {
     model.enqueue(say("never delivered"));
     channel.failures = 8;

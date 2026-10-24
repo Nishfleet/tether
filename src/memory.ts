@@ -10,11 +10,14 @@ const save = defineTool({
   replay: "safe",
   execute: async (args, api, context) => {
     const outcome = await api.commit(async (tx) => {
-      const { notes } = await tx.doc(MemoryDoc);
+      const memory = await tx.doc(MemoryDoc);
+      const { notes } = memory;
       const same = notes.find((note) => note.text === args.note);
       if (same) return same.id;
       if (notes.length >= NOTE_LIMIT) return undefined;
-      const id = `n${Math.max(0, ...notes.map((note) => Number(note.id.slice(1)) || 0)) + 1}`;
+      const next = memory.next ?? Math.max(0, ...notes.map((note) => Number(note.id.slice(1)) || 0)) + 1;
+      const id = `n${next}`;
+      memory.next = next + 1;
       notes.push({ id, text: args.note, at: api.now() });
       return id;
     }, context);

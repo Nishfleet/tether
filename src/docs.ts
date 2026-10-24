@@ -13,6 +13,7 @@ export type Note = {
 
 export type Memory = {
   notes: Note[];
+  next?: number;
 };
 
 export const SEEN_LIMIT = 500;
@@ -31,6 +32,6 @@ export const MemoryDoc = defineDoc<Memory>({
   kind: "tether.memory",
   version: 1,
   scope: "session",
-  initial: () => ({ notes: [] }),
+  initial: () => ({ notes: [], next: 1 }),
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
 });

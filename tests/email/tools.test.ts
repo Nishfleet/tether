@@ -94,6 +94,16 @@ it("email_search returns one-line summaries, and no matching email on an empty m
   assert.equal(empty.text, "No matching email.");
 });
 
+it("email_read caps long header fields", async () => {
+  const backend = new FakeEmail();
+  const { run } = setup(backend);
+  backend.message = { id: "m1", from: "a".repeat(200), to: "b".repeat(200), subject: "c".repeat(200), date: new Date("2026-10-24T08:15:00+05:30"), body: "hello" };
+  const out = await run("email_read", { id: "m1" });
+  assert.match(out.text, /^From: a{60}\.\.\.$/m);
+  assert.match(out.text, /^To: b{60}\.\.\.$/m);
+  assert.match(out.text, /^Subject: c{120}\.\.\.$/m);
+});
+
 it("email_search answers with a failure line when Gmail errors, never a throw", async () => {
   const backend = new FakeEmail();
   const { run } = setup(backend);
