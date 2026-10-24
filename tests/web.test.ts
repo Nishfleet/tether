@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { NOTE, MAX_HTML_BYTES, MAX_PAGE_CHARS, SEARCH_RESULTS, SEARCH_URL, SNIPPET_CHARS, clean, formatResults, pageTarget, readPage, reason, searchWeb, webTools } from "../src/web.ts";
+import { askText } from "../src/approval.ts";
+import { Links, NOTE, MAX_HTML_BYTES, MAX_PAGE_CHARS, SEARCH_RESULTS, SEARCH_URL, SNIPPET_CHARS, clean, formatResults, pageTarget, readPage, reason, searchWeb, webTools } from "../src/web.ts";
 
 type Seen = { url: string; init: { headers: Record<string, string>; redirect: string; method?: string; body?: string } };
 
@@ -148,10 +149,29 @@ describe("web tools", () => {
     assert.equal(reason("nope"), "unknown");
   });
 
-  it("offers the two read-only tools, neither asking first", () => {
-    const tools = webTools({ fetch: async () => new Response(""), userAgent: "tether-test", log: () => {}, searchApiKey: "k" });
+  it("offers two read-only tools, and only web_read can ask first", () => {
+    const tools = webTools({ fetch: async () => new Response(""), userAgent: "tether-test", log: () => {}, links: new Links(), searchApiKey: "k" });
     assert.deepEqual(tools.map((tool) => tool.name), ["web_search", "web_read"]);
-    for (const tool of tools) assert.equal("askFirst" in tool, false);
+    assert.equal("askFirst" in tools[0], false);
+    assert.equal("askFirst" in tools[1], true);
     for (const tool of tools) assert.equal(tool.replay, "safe");
+  });
+
+  it("asks only for a public link that came from neither the owner nor a search", () => {
+    const links = new Links();
+    const [, read] = webTools({ fetch: async () => new Response(""), userAgent: "t", log: () => {}, links });
+    const rule = (url: string) => (read.askFirst as (args: { url: string }) => string | undefined)({ url });
+    assert.match(rule("https://evil.test/?d=notes") ?? "", /^Open https:\/\/evil\.test\/\?d=notes /);
+    assert.equal(rule("http://127.0.0.1/"), undefined, "a refused link needs no ask");
+    links.fromOwner("read https://tea.test/a#top, please");
+    links.fromSearch([{ title: "t", url: "https://found.test/b", published: "", snippet: "" }]);
+    assert.equal(rule("https://tea.test/a"), undefined);
+    assert.equal(rule("https://found.test/b"), undefined);
+    assert.ok(rule("https://tea.test/a/other"));
+    links.newTask();
+    assert.ok(rule("https://found.test/b"), "a search result counts for its own task only");
+    assert.equal(rule("https://tea.test/a"), undefined, "the owner's text stays");
+    const long = `https://evil.test/?d=${"x".repeat(1900)}`;
+    assert.ok(askText(rule(long) ?? "").includes(long));
   });
 });
