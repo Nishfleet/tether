@@ -178,6 +178,7 @@ describe("tether app, in process", () => {
     assert.deepEqual(names, [
       "brief_off",
       "brief_set",
+      "brief_status",
       "location_last",
       "location_request",
       "memory_forget",

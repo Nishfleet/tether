@@ -57,7 +57,7 @@ without the model. Text `RESUME` to continue.
   file and are listed in the system prompt of every request, so they survive
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
-  `reminder_list`, `reminder_cancel`, `brief_set`, `brief_off`, `location_request`, `location_last`,
+  `reminder_list`, `reminder_cancel`, `brief_set`, `brief_off`, `brief_status`, `location_request`, `location_last`,
   `places_nearby` and `text_owner`, plus the calendar and contacts tools when an
   account is connected (see Calendar and contacts) and its own computer when
   configured (see Its own computer). Nothing else. Any tool that can act for Nish carries
@@ -148,9 +148,9 @@ Reminders live in Tether and arrive as iMessage texts.
 
 ## Morning brief
 
-Every day at 08:00 (`TETHER_TIMEZONE`) Tether texts one brief: today's calendar events, reminders due today, and the weather where the owner is when the brief is due (Open-Meteo, no key, skipped when the owner is not sharing a location). A source that is not connected or fails is skipped. Text "brief at 7:30" or "stop the brief" (`brief_set`, `brief_off`) to change it.
-It is one Pi Durable task (`tether.brief`) that sleeps until the next brief time, like a reminder, so a restart changes nothing. A brief more than 3 hours late is skipped, and nothing is sent while Tether is stopped.
-The time and the on/off switch live in the durable document `tether.brief.settings`, so a restart keeps both.
+Every day at 08:00 (`TETHER_TIMEZONE`) Tether texts one brief: today's calendar events, reminders due today, and the weather where the owner is when the brief is due (Open-Meteo, no key, skipped when the owner is not sharing a location). A source that is not connected or fails is skipped. The weather line says "where you are" while the Find My location is under 3 hours old and "where you last were" after that, and the coordinate sent to Open-Meteo is rounded to two decimals, about 1 km: the request carries the rounded point and the time zone and nothing that identifies the owner. Text "brief at 7:30" or "stop the brief" (`brief_set`, `brief_off`) to change it, or ask when it comes (`brief_status`).
+It is one Pi Durable task (`tether.brief`) at a time that sleeps until the next brief time, like a reminder, so a restart changes nothing. A brief more than 3 hours late is skipped, a calendar backend that hangs is cut off after 10 seconds and skipped, and nothing is sent while Tether is stopped, and nothing is looked up for one. A brief that comes due while STOP is on is dropped rather than held: it is a morning greeting, not a reminder, so it does not pile up for `RESUME` the way a reminder does.
+The time and the on/off switch live in the durable document `tether.brief.settings`, so a restart keeps both, and STOP is read before any source is called. A fresh install texts no brief until the owner has written once, because the brief needs the chat to answer in, and that skip is not retried the same day.
 
 ## Location
 
@@ -192,7 +192,9 @@ system prompt tells the model to treat it as data.
 | --- | --- | --- |
 | Find My is read only for the allowed sender's own handle, never stored or logged with coordinates | yes, `createFindMy` takes the one owner address | `tests/findmy.test.ts` |
 | The lookup calls one fixed https host, with no redirects | yes, `PLACES_URL`, `redirect: "error"` | `tests/assist.test.ts`, `tests/location.test.ts` |
-| The weather lookup calls one fixed https host, with no redirects and a 10 s timeout | yes, `WEATHER_URL`, `redirect: "error"` | `tests/brief.test.ts` |
+| The weather lookup calls one fixed https host, with no redirects and a 10 s timeout | yes, `WEATHER_URL`, `redirect: "error"` | `tests/brief.test.ts` (asserts the host, the redirect mode, the abort signal and the rounded coordinate) |
+| The weather line says "where you last were" rather than "where you are" once the location is over 3 hours old | yes, `WEATHER_FRESH_MS` | `tests/brief.test.ts` |
+| The brief time and the on/off switch survive a restart, and STOP is read before any lookup | yes, `tether.brief.settings`, the check runs before `compose` | `tests/brief.test.ts` |
 | Reminders text only the owner's chat | yes, the space is saved from accepted messages only | `tests/assist.test.ts` |
 | STOP holds due reminders until RESUME | yes, `tether.reminder` checks the state in its sending commit and `RESUME` releases them | `tests/assist.test.ts`, `tests/reminder-crash.test.ts` |
 | A reminder survives a kill and is sent once | yes, durable sleep | `tests/reminder-crash.test.ts` |

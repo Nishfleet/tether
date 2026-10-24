@@ -26,7 +26,6 @@ export class FakeClock {
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
 
-  /** The process died: its timers are gone, time moves on. */
   async restart(ms: number): Promise<void> {
     this.timers = [];
     this.time += ms;

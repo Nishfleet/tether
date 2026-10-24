@@ -4,7 +4,7 @@ import { defineDoc, defineTask, defineTool, type ConversationId, type Task, type
 import { type CalendarOptions, dedupe } from "./calendar/tools.ts";
 import { addDays, isoDay, parseWhen } from "./calendar/time.ts";
 import { CLEAR_TITLE, clean } from "./calendar/untrusted.ts";
-import type { Locations } from "./channel.ts";
+import type { LiveLocation, Locations } from "./channel.ts";
 import { StateDoc } from "./docs.ts";
 import type { Log } from "./log.ts";
 import { OwnerDoc } from "./owner.ts";
@@ -27,6 +27,8 @@ export const LATE_MS = 3 * 3_600_000;
 export const WEATHER_HOST = "api.open-meteo.com";
 export const WEATHER_URL = `https://${WEATHER_HOST}/v1/forecast`;
 export const WEATHER_TIMEOUT_MS = 10000;
+export const WEATHER_FRESH_MS = 3 * 60 * 60 * 1000;
+export const CALENDAR_TIMEOUT_MS = 10000;
 export const TIME_PATTERN = "^([01]\\d|2[0-3]):[0-5]\\d$";
 
 export const BriefDoc = defineDoc<Brief>({
@@ -60,10 +62,24 @@ export function nextBriefAt(after: number, time: string, zone: string): number {
 
 const clock = (ms: number, zone: string) => new Intl.DateTimeFormat("en-GB", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms));
 
+async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("calendar timeout")), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function calendarLine(options: BriefOptions, from: Date, to: Date): Promise<string | undefined> {
   const backends = options.calendar?.backends.calendar ?? [];
   if (backends.length === 0) return undefined;
-  const settled = await Promise.allSettled(backends.map((backend) => backend.list(from, to)));
+  const settled = await Promise.allSettled(backends.map((backend) => withDeadline(backend.list(from, to), CALENDAR_TIMEOUT_MS)));
   const events = settled.flatMap((outcome, index) => {
     if (outcome.status === "fulfilled") return outcome.value;
     options.log("brief_source_failed", { source: backends[index]?.source ?? "calendar", error: outcome.reason instanceof Error ? outcome.reason.name : "unknown" });
@@ -75,10 +91,10 @@ async function calendarLine(options: BriefOptions, from: Date, to: Date): Promis
   return `Calendar: ${items.join("; ")}.`;
 }
 
-async function weatherLine(options: BriefOptions, place: { latitude: number; longitude: number }): Promise<string | undefined> {
+async function weatherLine(options: BriefOptions, place: LiveLocation, now: number): Promise<string | undefined> {
   const url = new URL(WEATHER_URL);
-  url.searchParams.set("latitude", String(place.latitude));
-  url.searchParams.set("longitude", String(place.longitude));
+  url.searchParams.set("latitude", place.latitude.toFixed(2));
+  url.searchParams.set("longitude", place.longitude.toFixed(2));
   url.searchParams.set("daily", "temperature_2m_max,temperature_2m_min,precipitation_probability_max");
   url.searchParams.set("forecast_days", "1");
   url.searchParams.set("timezone", options.timeZone);
@@ -96,7 +112,8 @@ async function weatherLine(options: BriefOptions, place: { latitude: number; lon
     const rain = first("precipitation_probability_max");
     if (typeof high !== "number" || typeof low !== "number") throw new Error("weather reply has no temperatures");
     const chance = typeof rain === "number" ? `, ${Math.round(rain)}% chance of rain` : "";
-    return `Weather where you are: ${Math.round(low)} to ${Math.round(high)} C${chance}.`;
+    const where = now - place.at < WEATHER_FRESH_MS ? "Weather where you are" : "Weather where you last were";
+    return `${where}: ${Math.round(low)} to ${Math.round(high)} C${chance}.`;
   } catch (error) {
     options.log("brief_source_failed", { source: "weather", error: error instanceof Error ? error.name : "unknown" });
     return undefined;
@@ -105,13 +122,22 @@ async function weatherLine(options: BriefOptions, place: { latitude: number; lon
 
 type Runtime = TaskRuntime<BriefInput, BriefState, null, object>;
 
+async function locationOf(options: BriefOptions): Promise<LiveLocation | undefined> {
+  try {
+    return await options.locations?.current();
+  } catch (error) {
+    options.log("brief_source_failed", { source: "location", error: error instanceof Error ? error.name : "unknown" });
+    return undefined;
+  }
+}
+
 async function compose(options: BriefOptions, runtime: Runtime, context: Context): Promise<string> {
   const { timeZone } = options;
   const now = runtime.now();
   const start = addDays(new Date(now), timeZone, 0);
   const end = addDays(new Date(now), timeZone, 1);
   const reminders = await runtime.snapshot(RemindersDoc, context);
-  const here = await options.locations?.current();
+  const here = await locationOf(options);
   const due = (reminders?.items ?? [])
     .filter((item) => item.at >= start.getTime() && item.at < end.getTime())
     .sort((a, b) => a.at - b.at)
@@ -119,7 +145,7 @@ async function compose(options: BriefOptions, runtime: Runtime, context: Context
   const lines = [
     await calendarLine(options, start, end),
     due.length > 0 ? `Reminders: ${due.join("; ")}.` : undefined,
-    here ? await weatherLine(options, here) : undefined,
+    here ? await weatherLine(options, here, now) : undefined,
   ].filter((line) => line !== undefined);
   return ["Good morning.", ...(lines.length > 0 ? lines : ["Nothing scheduled today."])].join("\n");
 }
@@ -143,21 +169,28 @@ export function createBriefTask(options: BriefOptions): BriefTask {
           await runtime.sleepUntil(at, { phase: "wait", at }, context);
           return;
         }
-        const body = runtime.now() - at > LATE_MS ? undefined : await compose(options, runtime, context);
+        const owner = await runtime.snapshot(OwnerDoc, context);
+        const stopped = (await runtime.snapshot(StateDoc, context))?.stopped === true;
+        let reason = runtime.now() - at > LATE_MS ? "late" : owner?.space == null ? "no_space" : stopped ? "stopped" : undefined;
+        const body = reason === undefined ? await compose(options, runtime, context) : undefined;
+        let sent = false;
         await runtime.commit(async (tx) => {
           const brief = await tx.doc(BriefDoc);
           if (brief.gen !== gen || brief.time === null) return { status: "terminal", outcome: { status: "aborted", reason: "superseded" } };
-          const owner = await tx.doc(OwnerDoc);
-          if (body === undefined) log("brief_skipped", { reason: "late" });
-          else if (owner.space === null) log("brief_skipped", { reason: "no_space" });
-          else if ((await tx.doc(StateDoc)).stopped) log("brief_skipped", { reason: "stopped" });
+          const space = (await tx.doc(OwnerDoc)).space;
+          if (body === undefined) reason ??= "late";
+          else if (space === null) reason = "no_space";
+          else if ((await tx.doc(StateDoc)).stopped) reason = "stopped";
           else {
-            const notice: ReplyInput = { space: owner.space, inbound: null, prompt: null, notice: body, run: 0 };
+            const notice: ReplyInput = { space, inbound: null, prompt: null, notice: body, run: 0 };
             await tx.createTask(reply, notice, { ownership: { kind: "conversation" }, conversationId: runtime.conversationId });
+            sent = true;
           }
           const until = nextBriefAt(runtime.now(), brief.time, timeZone);
           return { status: "sleeping", until, checkpoint: { phase: "wait", at: until } };
         }, context);
+        if (sent) log("brief_sent", { due: at });
+        else log("brief_skipped", { reason: reason ?? "no_space" });
       },
     },
     abort: async (_task, runtime, context) => {
@@ -205,5 +238,17 @@ export function briefTools(options: { task: BriefTask; timeZone: string }) {
     },
   });
 
-  return [set, off];
+  const status = defineTool({
+    name: "brief_status",
+    description: "Say when the daily morning brief comes, or that it is off. Call it before answering a question about the brief's time.",
+    parameters: Type.Object({}),
+    replay: "safe",
+    execute: async (_args, api, context) => {
+      const brief = await api.snapshot(BriefDoc, context);
+      if (!brief || brief.time === null) return text("The morning brief is off.");
+      return text(`The morning brief comes every day at ${brief.time} (${timeZone}).`);
+    },
+  });
+
+  return [set, off, status];
 }
