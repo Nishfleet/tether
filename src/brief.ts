@@ -29,7 +29,7 @@ export const WEATHER_HOST = "api.open-meteo.com";
 export const WEATHER_URL = `https://${WEATHER_HOST}/v1/forecast`;
 export const WEATHER_TIMEOUT_MS = 10000;
 export const WEATHER_FRESH_MS = 3 * 60 * 60 * 1000;
-export const CALENDAR_TIMEOUT_MS = 10000;
+export const SOURCE_TIMEOUT_MS = 10000;
 export const TIME_PATTERN = "^([01]\\d|2[0-3]):[0-5]\\d$";
 
 export const BriefDoc = defineDoc<Brief>({
@@ -58,18 +58,18 @@ export function nextBriefAt(after: number, time: string, zone: string): number {
     const at = parseWhen(`${day}T${time}`, zone)?.date.getTime();
     if (at !== undefined && at > after) return at;
   }
-  return after + 86_400_000;
+  return addDays(new Date(after), zone, 1).getTime();
 }
 
 const clock = (ms: number, zone: string) => new Intl.DateTimeFormat("en-GB", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms));
 
-async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+async function withDeadline<T>(work: () => Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      work,
+      work(),
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("calendar timeout")), ms);
+        timer = setTimeout(() => reject(new Error("source timeout")), ms);
       }),
     ]);
   } finally {
@@ -80,7 +80,7 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
 async function calendarLine(options: BriefOptions, from: Date, to: Date): Promise<string | undefined> {
   const backends = options.calendar?.backends.calendar ?? [];
   if (backends.length === 0) return undefined;
-  const settled = await Promise.allSettled(backends.map((backend) => withDeadline(backend.list(from, to), CALENDAR_TIMEOUT_MS)));
+  const settled = await Promise.allSettled(backends.map((backend) => withDeadline(() => backend.list(from, to), SOURCE_TIMEOUT_MS)));
   const events = settled.flatMap((outcome, index) => {
     if (outcome.status === "fulfilled") return outcome.value;
     options.log("brief_source_failed", { source: backends[index]?.source ?? "calendar", error: outcome.reason instanceof Error ? outcome.reason.name : "unknown" });
@@ -111,8 +111,8 @@ async function weatherLine(options: BriefOptions, place: LiveLocation, now: numb
     const high = first("temperature_2m_max");
     const low = first("temperature_2m_min");
     const rain = first("precipitation_probability_max");
-    if (typeof high !== "number" || typeof low !== "number") throw new Error("weather reply has no temperatures");
-    const chance = typeof rain === "number" ? `, ${Math.round(rain)}% chance of rain` : "";
+    if (typeof high !== "number" || typeof low !== "number" || !Number.isFinite(high) || !Number.isFinite(low)) throw new Error("weather reply has no temperatures");
+    const chance = typeof rain === "number" && Number.isFinite(rain) ? `, ${Math.round(rain)}% chance of rain` : "";
     const where = now - place.at < WEATHER_FRESH_MS ? "Weather where you are" : "Weather where you last were";
     return `${where}: ${Math.round(low)} to ${Math.round(high)} C${chance}.`;
   } catch (error) {
@@ -125,7 +125,9 @@ type Runtime = TaskRuntime<BriefInput, BriefState, null, object>;
 
 async function locationOf(options: BriefOptions): Promise<LiveLocation | undefined> {
   try {
-    return await options.locations?.current();
+    const places = options.locations;
+    if (places === undefined) return undefined;
+    return await withDeadline(() => places.current(), SOURCE_TIMEOUT_MS);
   } catch (error) {
     options.log("brief_source_failed", { source: "location", error: error instanceof Error ? error.name : "unknown" });
     return undefined;

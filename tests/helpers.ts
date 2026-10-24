@@ -206,4 +206,8 @@ export class FakeChannel implements Channel {
     this.ended = true;
     this.wake?.();
   }
+
+  restart(): void {
+    this.ended = false;
+  }
 }

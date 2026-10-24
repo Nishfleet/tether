@@ -69,11 +69,7 @@ describe("morning brief", () => {
 
   const restart = async (down: number, extra: Parameters<Rig["boot"]>[0] = {}) => {
     await rig.tether?.stop();
-    const before = [...rig.channel.sent];
-    const places = rig.channel.locations;
-    rig.channel = new FakeChannel();
-    rig.channel.sent.push(...before);
-    rig.channel.locations = places;
+    rig.channel.restart();
     await clock.restart(down);
     await boot(extra);
   };
@@ -118,6 +114,7 @@ describe("morning brief", () => {
     assert.equal(url.host, WEATHER_HOST);
     assert.equal(url.searchParams.get("latitude"), "12.97");
     assert.equal(url.searchParams.get("longitude"), "77.58");
+    assert.deepEqual([...url.searchParams.keys()].sort(), ["daily", "forecast_days", "latitude", "longitude", "timezone"]);
     assert.equal(sent.init.redirect, "error");
     assert.ok(sent.init.signal instanceof AbortSignal);
     assert.match(sent.init.headers["user-agent"] ?? "", /tether/);
@@ -185,6 +182,30 @@ describe("morning brief", () => {
     await until(() => briefs().length === 1, 20000);
     assert.equal(briefs()[0], "Good morning.\nWeather where you are: 22 to 31 C, 40% chance of rain.");
     assert.ok(rig.logs.some((entry) => entry.event === "brief_source_failed" && entry.fields.source === "google"));
+  });
+
+  it("does not send a brief before the owner has written once", opts, async () => {
+    rig.channel.locations = here(clock.now());
+    await boot({ fetch: forecast(), calendar: calendarOf(async () => []) });
+    await clock.advance(90 * MIN);
+    await until(() => rig.logs.some((entry) => entry.event === "brief_skipped" && entry.fields.reason === "no_space"));
+    assert.deepEqual(briefs(), []);
+    await clock.advance(24 * 60 * MIN);
+    assert.deepEqual(briefs(), [], "and not later the same day");
+  });
+
+  it("sends one more brief the same day when the time is moved after it", opts, async () => {
+    await boot({ fetch: forecast(), calendar: calendarOf(async () => []) });
+    await textOnce();
+    rig.model.enqueue(call("brief_set", { time: "20:00" }), say("Moved."));
+    await clock.advance(90 * MIN);
+    await until(() => briefs().length === 1);
+    rig.channel.push(inbound("m1", "brief at 8pm"));
+    await until(() => rig.texts().includes("Moved."));
+    await clock.advance(12 * 60 * MIN);
+    await until(() => briefs().length === 2);
+    await clock.advance(24 * 60 * MIN);
+    await until(() => briefs().length === 3);
   });
 
   it("texts a stale location less confidently than a fresh one", opts, async () => {
