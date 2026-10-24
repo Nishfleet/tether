@@ -60,8 +60,10 @@ without the model. Text `RESUME` to continue.
   `reminder_list`, `reminder_cancel`, `location_request`, `location_last`,
   `places_nearby` and `text_owner`, plus the calendar and contacts tools when an
   account is connected (see Calendar and contacts) and its own computer when
-  configured (see Its own computer). Nothing else. Any tool that can act for Nish carries
-  `askFirst`; see Safety rules.
+  configured (see Its own computer), and `fleet_request` when configured (see
+  Fleet requests). Nothing else. Any tool that can act for Nish carries
+  `askFirst`, except `fleet_request`, which only asks Nish's own fleet for
+  work; see Safety rules.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
   model group once the context passes `contextWindow - 16384` tokens
@@ -244,6 +246,8 @@ Read from the environment. In production the unit loads `/etc/tether/tether.env`
 | `TETHER_STATE_DIR` | no | state directory; falls back to `STATE_DIRECTORY`, which systemd sets to `/var/lib/tether` |
 | `TETHER_SPACE_URL` | no | where its own Cua Space listens: `http://127.0.0.1:<port>`, the port Cua publishes for that Space (any other host or form is refused). With `TETHER_SPACE_TOKEN`, it decides: if either is unset, no computer tool exists |
 | `TETHER_SPACE_TOKEN` | no | the Space's own key (Cua's per-Space spacesd token). It opens that one Space and nothing else. Never logged |
+| `TETHER_TINCAN_CONFIG` | no | path to Tether's own Agent Tincan identity file (agent name `tether`). With `TETHER_TINCAN_BIN`, it decides: if either is unset, `fleet_request` does not exist |
+| `TETHER_TINCAN_BIN` | no | path to the stock `tincan` binary |
 
 State is one SQLite file, `tether.sqlite`, in the state directory.
 
@@ -397,6 +401,32 @@ Switch it off: remove `TETHER_SPACE_URL` and `TETHER_SPACE_TOKEN` from the env
 file and restart. No computer tool is then registered. Delete it: remove
 `src/computer*`, its tests and the `@trycua/cua` dependency, and ask the server
 to delete the Space.
+
+## Fleet requests
+
+`fleet_request(text)` in `src/fleet.ts` sends one fix or feature request from
+Nish to the fleet's `issue-desk` agent over Agent Tincan. `issue-desk` files an
+`agent-ready` issue in a product repo and answers with its link. Tether gets no
+GitHub access, shell or token: only one Agent Tincan identity, named `tether`.
+
+- The model calls it when Nish clearly asks for a change to a product. It does
+  not ask first: the request goes to Nish's own fleet, not to another person.
+  Only Nish's direct messages reach the model, and STOP halts it like any tool.
+- It makes one call to the stock client with an argument array, never a shell
+  string: `tincan ask issue-desk --json -- <text>`, with `TINCAN_CONFIG` set to
+  `TETHER_TINCAN_CONFIG`. The client waits up to its built-in 20 seconds; Tether
+  kills the client at 30 seconds. An answer in time comes back as one line, the
+  issue link. No answer in time gives `Sent to the fleet, request <id>`, and
+  Tether stops there. If Tether's own 30-second kill fires with no answer, the
+  owner hears that the request may still have been sent, so it is never reported
+  as simply lost. A refusal, a client error or an answer it cannot read gives
+  `The fleet request failed: <reason>`.
+
+Setup: the identity file and the `tincan` binary for the service user come from
+`fleet-ops`, not this repo. Switch it off: unset `TETHER_TINCAN_CONFIG` in
+`/etc/tether/tether.env` and restart. No fleet tool is then registered. Delete
+it: remove `src/fleet.ts`, `tests/fleet.test.ts`, the `fleet_request` wiring in
+`src/main.ts`, and the `TincanConfig` lines in `src/config.ts`.
 
 ## Safety rules
 
