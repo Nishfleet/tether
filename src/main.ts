@@ -39,6 +39,7 @@ export async function run(
     salt: loadSalt(config.stateDir),
     log,
     timeZone: config.timeZone,
+    searchApiKey: config.searchApiKey,
     ...(calendar ? { calendar } : {}),
     ...(overrides.retryBaseMs === undefined ? {} : { retryBaseMs: overrides.retryBaseMs }),
     ...(tools.length === 0 ? {} : { tools }),
