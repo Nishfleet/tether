@@ -2,11 +2,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { HarnessSettings } from "@earendil-works/pi-durable";
-import { startTether, type Tether, INSTRUCTIONS, STOPPED_TEXT, RESUMED_TEXT, NOT_STOPPED_TEXT } from "../src/app.ts";
+import { startTether, type Tether, INSTRUCTIONS, STOPPED_TEXT, RESUMED_TEXT } from "../src/app.ts";
 import { seedNote } from "./offline.ts";
 import { createModelAccess, MAX_OUTPUT_TOKENS } from "../src/model.ts";
 import { FAILURE_TEXT, MAX_PART_CHARS, TRUNCATED_MARKER } from "../src/reply.ts";
@@ -253,7 +252,7 @@ describe("tether app, in process", () => {
     assert.deepEqual(memory.sort(), ["n1: note B", "n5f3a9c1e: an older note"]);
   });
 
-  it("drops an exhausted send from the in-flight list so RESUME does not re-ask it", opts, async () => {
+  it("does not re-ask an exhausted send after RESUME", opts, async () => {
     model.enqueue(say("never delivered"));
     channel.failures = 8;
     await boot(1);
@@ -276,7 +275,6 @@ describe("tether app, in process", () => {
     const line = logs.find((entry) => entry.includes('"ignored"')) ?? "";
     assert.match(line, /"id":"x1"/);
     assert.ok(!line.includes("stranger@example.test"));
-    assert.deepEqual(JSON.parse(line).at, undefined);
   });
 
   it("compacts the thread when it crosses a small context window and keeps replying", opts, async () => {

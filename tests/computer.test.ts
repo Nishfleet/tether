@@ -199,7 +199,7 @@ describe("connecting to its Space", () => {
       chmodSync(locked, 0);
       const result = await read({ path: locked });
       assert.equal(result.isError, true);
-      assert.match(textOf(result), /Permission denied/);
+      assert.match(textOf(result), /not readable/);
     });
 
     it("keeps a hostile path inside one quoted word", async () => {

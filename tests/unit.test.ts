@@ -5,7 +5,6 @@ import { describe, it } from "node:test";
 import { normalizeHandle } from "../src/channel.ts";
 import { loadConfig, loadPhotonConfig } from "../src/config.ts";
 import { classify } from "../src/control.ts";
-import type { ProviderStreams } from "@earendil-works/pi-ai";
 import { routerBaseUrl } from "../src/model.ts";
 import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
 import { ALLOWED, inbound } from "./helpers.ts";

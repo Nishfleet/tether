@@ -8,7 +8,7 @@ and the host config belong to `Nishfleet/fleet-ops`; this repo is the app.
 
 It works the way the big-company agents do: it answers only its owner, it uses
 its tools and connected accounts freely, and it asks first only before it
-messages someone else or spends money.
+messages someone else. No tool can move money.
 
 ## What it does
 
@@ -71,10 +71,10 @@ systemctl disable --now tether-agent.service
 ```
 
 Without root, text `STOP`. It sets a durable stopped flag, cancels pending
-questions and aborts the running work. Nothing runs and nothing is sent until
-you text `RESUME`. What was running or due while stopped is dropped, not asked
-again, and a reminder that comes due while stopped is logged as
-`reminder_dropped`.
+questions and aborts the running work. Nothing new starts and nothing is sent
+until you text `RESUME` (a send already handed to iMessage can still arrive).
+What was running or due while stopped is dropped, not asked again, and a reminder
+that comes due while stopped is logged as `reminder_dropped`.
 
 ## Configuration
 
@@ -121,7 +121,9 @@ refresh token dies after 7 days).
    `printf`, so they never show in `ps`. The answer prints to the terminal.
 
    ```sh
-   read -rs CLIENT_SECRET; read -r CLIENT_ID; read -r CODE
+   printf 'Client id: '; read -r CLIENT_ID
+   printf 'Client secret: '; read -rs CLIENT_SECRET; echo
+   printf 'Code: '; read -r CODE
    printf 'client_id=%s&client_secret=%s&code=%s&redirect_uri=http://127.0.0.1:8765&grant_type=authorization_code' \
      "$CLIENT_ID" "$CLIENT_SECRET" "$CODE" | curl -s https://oauth2.googleapis.com/token -d @-
    ```
