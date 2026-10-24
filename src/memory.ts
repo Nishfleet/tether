@@ -3,6 +3,12 @@ import { defineExtension, defineTool, section, type Extension } from "@earendil-
 import { MemoryDoc, NOTE_CHARS, NOTE_LIMIT } from "./docs.ts";
 import { failure, text } from "./tool.ts";
 
+const nextMemoryId = (ids: readonly string[]) =>
+  ids.reduce((max, id) => {
+    const parsed = Number(id.slice(1));
+    return Number.isSafeInteger(parsed) && parsed > max ? parsed : max;
+  }, 0) + 1;
+
 const save = defineTool({
   name: "memory_save",
   description: `Save one short note to your own long-term memory so you still know it in later conversations. At most ${NOTE_CHARS} characters.`,
@@ -14,7 +20,7 @@ const save = defineTool({
       const same = notes.find((note) => note.text === args.note);
       if (same) return same.id;
       if (notes.length >= NOTE_LIMIT) return undefined;
-      const id = `n${Math.max(0, ...notes.map((note) => Number(note.id.slice(1)) || 0)) + 1}`;
+      const id = `n${nextMemoryId(notes.map((note) => note.id))}`;
       notes.push({ id, text: args.note, at: api.now() });
       return id;
     }, context);

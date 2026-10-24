@@ -185,7 +185,7 @@ export function createApprovalExtension(options: ApprovalOptions): Extension {
             if ((await tx.doc(StateDoc)).stopped) return "stopped";
             const { space } = await tx.doc(OwnerDoc);
             if (space === null) return "no_chat";
-            doc.items.splice(0, doc.items.length, ...doc.items.filter((item) => item.status === "pending"));
+            doc.items.splice(0, doc.items.length, ...doc.items.filter((item) => item.status === "pending" || item.expiresAt > now()));
             doc.items.push({ key, summary: oneLine(summary), space, expiresAt, asked: false, status: "pending" });
             await promote(tx, notify);
             return "pending";

@@ -4,11 +4,10 @@ Owner: **nish3451** (`.github/CODEOWNERS`). Spec: `Nishfleet/fleet-ops#9980`.
 
 Tether is a personal agent that talks to one person over iMessage. It runs on
 the VPS as `tether-agent.service`. The unit, the service user, the firewall rule
-and the host config belong to `Nishfleet/fleet-ops`; this repo is the app.
-
-It works the way the big-company agents do: it answers only its owner, it uses
-its tools and connected accounts freely, and it asks first only before it
-messages someone else or spends money.
+and the host config belong to `Nishfleet/fleet-ops`; this repo is the app. It
+works the way the big-company agents do: it answers only its owner, it uses its
+tools and connected accounts freely, and it asks first only before it messages
+someone else or spends money.
 
 ## What it does
 
@@ -68,14 +67,14 @@ systemctl disable --now tether-agent.service
 ```
 
 Without root, text `STOP`. It sets a durable stopped flag, cancels pending
-questions and aborts the running work. Nothing runs and nothing is sent until
-you text `RESUME`. What was running or due while stopped is dropped, not asked
-again, and a reminder that comes due while stopped is logged as
-`reminder_dropped`.
+questions and aborts the running work. Nothing runs until you text `RESUME`.
+What was running or due while stopped is dropped, not asked again, and a
+reminder due while stopped is logged as `reminder_dropped`.
 
 ## Configuration
 
-The unit loads `/etc/tether/tether.env` (root:tether 0640, never in git).
+The unit loads `/etc/tether/tether.env`, `/etc/tether/photon.env` and
+`/etc/tether/calendar.env` (root:tether 0640, never in git).
 
 | Name | Required | Meaning |
 | --- | --- | --- |
@@ -96,8 +95,9 @@ account stops the start with an error that names the missing variables.
 
 ## Connect an account
 
-Put the variables in `/etc/tether/tether.env`, then
-`systemctl restart tether-agent.service`. To disconnect, remove them and restart.
+Put the variables in `/etc/tether/tether.env` (Google and iCloud in
+`calendar.env`), then `systemctl restart tether-agent.service`. To disconnect,
+remove them and restart.
 
 **iCloud.** Make an app-specific password at appleid.apple.com (Sign-In and
 Security). Set `TETHER_ICLOUD_APPLE_ID` and `TETHER_ICLOUD_APP_PASSWORD`. Never

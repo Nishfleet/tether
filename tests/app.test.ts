@@ -241,6 +241,7 @@ describe("tether app, in process", () => {
 
   it("numbers a new note after the highest id, including notes saved before ids were numbers", opts, async () => {
     await seedNote(join(dir, "t.sqlite"), { id: "n5f3a9c1e", text: "an older note", at: 1 });
+    await seedNote(join(dir, "t.sqlite"), { id: `n${"9".repeat(64)}`, text: "a wide id", at: 2 });
     model.enqueue(call("memory_save", { note: "note B" }), call("memory_save", { note: "note B" }), say("done"));
     await boot();
     channel.push(inbound("m1", "save it"));
@@ -249,7 +250,7 @@ describe("tether app, in process", () => {
     channel.push(inbound("m2", "recall"));
     await channel.sentCount(2);
     const memory = String(model.requests.at(-1)?.messages[0]?.content).split("\n").filter((line) => /^n[0-9a-f]+: /.test(line));
-    assert.deepEqual(memory.sort(), ["n1: note B", "n5f3a9c1e: an older note"]);
+    assert.deepEqual(memory.sort(), ["n1: note B", "n5f3a9c1e: an older note", `n${"9".repeat(64)}: a wide id`].sort());
   });
 
   it("does not ask an exhausted send again after STOP and RESUME", opts, async () => {

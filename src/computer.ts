@@ -48,7 +48,8 @@ export function formatBash(result: BashResult): string {
 
 export const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 
-export const readCommand = (path: string) => `head -c ${READ_BYTES} -- ${shellQuote(path)}`;
+export const readCommand = (path: string) =>
+  `f=${shellQuote(path)}; if [ ! -f "$f" ]; then echo "not a regular file" >&2; exit 3; fi; if [ ! -r "$f" ]; then echo "not readable" >&2; exit 4; fi; head -c ${READ_BYTES} -- "$f"`;
 
 const succeeded = (result: BashResult) => !result.timedOut && !result.error && result.exitCode === 0;
 
