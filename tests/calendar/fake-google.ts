@@ -8,6 +8,18 @@ export const ACCESS_TOKEN = "access-token";
 
 export type Seen = { method: string; path: string; query: URLSearchParams; body: unknown };
 
+export type FakeGoogleMessage = {
+  id: string;
+  snippet: string;
+  internalDate: string;
+  payload: {
+    mimeType?: string;
+    headers?: { name: string; value: string }[];
+    body?: { data?: string; size?: number };
+    parts?: { mimeType?: string; body?: { data?: string } }[];
+  };
+};
+
 export class FakeGoogle {
   readonly seen: Seen[] = [];
   readonly tokenForms: URLSearchParams[] = [];
@@ -17,6 +29,10 @@ export class FakeGoogle {
   eventPages: Record<string, unknown[][]> = {};
   contacts: unknown[] = [];
   grantedScopes: string[] = [];
+  messageList: string[] = [];
+  messagesById: Record<string, FakeGoogleMessage> = {};
+  drafts: { message: { raw: string } }[] = [];
+  sent: { raw: string }[] = [];
   private server: Server | undefined;
   url = "";
 
@@ -75,6 +91,30 @@ export class FakeGoogle {
     }
     if (url.pathname === "/v1/people:createContact") {
       json({ resourceName: "people/new", ...(body as object) });
+      return;
+    }
+    if (url.pathname === "/gmail/v1/users/me/messages" && req.method === "GET") {
+      json({ messages: this.messageList.map((id) => ({ id })), resultSizeEstimate: this.messageList.length });
+      return;
+    }
+    if (url.pathname === "/gmail/v1/users/me/drafts" && req.method === "POST") {
+      this.drafts.push(body as { message: { raw: string } });
+      json({ id: "draft-1", message: { id: "draft-1" } });
+      return;
+    }
+    if (url.pathname === "/gmail/v1/users/me/messages/send" && req.method === "POST") {
+      this.sent.push(body as { raw: string });
+      json({ id: "sent-1" });
+      return;
+    }
+    const got = /^\/gmail\/v1\/users\/me\/messages\/([^/]+)$/.exec(url.pathname);
+    if (got && req.method === "GET") {
+      const message = this.messagesById[decodeURIComponent(got[1] as string)];
+      if (!message) {
+        res.writeHead(404).end();
+        return;
+      }
+      json(message);
       return;
     }
     res.writeHead(404).end();

@@ -87,7 +87,7 @@ describe("setup", () => {
         print: (line) => printed.push(line),
         envFile: file,
         timezone: "Asia/Kolkata",
-        endpoints: { tokenUrl: `${google.url}token`, calendarRoot: google.url, peopleRoot: google.url },
+        endpoints: { tokenUrl: `${google.url}token`, calendarRoot: google.url, peopleRoot: google.url, gmailRoot: google.url },
       });
 
     it("sends a consent link with PKCE and the narrow scopes, then stores the refresh token after a real read", async () => {
@@ -111,7 +111,7 @@ describe("setup", () => {
     });
 
     it("stores nothing when the person unticks a permission", async () => {
-      google.grantedScopes = GOOGLE_SCOPES.slice(0, 2);
+      google.grantedScopes = GOOGLE_SCOPES.slice(0, -1);
       await assert.rejects(run([CLIENT_ID, CLIENT_SECRET, "the-code"]), /missing permissions: 1/);
       assert.throws(() => readFileSync(file));
     });

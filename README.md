@@ -58,12 +58,12 @@ without the model. Text `RESUME` to continue.
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
   `reminder_list`, `reminder_cancel`, `location_request`, `location_last`,
-  `places_nearby` and `text_owner`, plus the calendar and contacts tools when an
-  account is connected (see Calendar and contacts) and its own computer when
-  configured (see Its own computer), and `fleet_request` when configured (see
-  Fleet requests). Nothing else. Any tool that can act for Nish carries
-  `askFirst`, except `fleet_request`, which only asks Nish's own fleet for
-  work; see Safety rules.
+  `places_nearby` and `text_owner`, plus the email, calendar and contacts tools
+  when an account is connected (see Email and Calendar and contacts) and its own
+  computer when configured (see Its own computer), and `fleet_request` when
+  configured (see Fleet requests). Nothing else. Any tool that can act for Nish
+  carries `askFirst`, except `fleet_request`, which only asks Nish's own fleet
+  for work; see Safety rules.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
   model group once the context passes `contextWindow - 16384` tokens
@@ -285,6 +285,49 @@ npm run build
 npm start
 ```
 
+## Email (Gmail)
+
+`Nishfleet/tether#42`. Search, read, draft and send from the same Google
+account the calendar uses. With no Google account connected, no email tool
+exists.
+
+| Tool | What it does | Needs approval |
+| --- | --- | --- |
+| `email_search` | up to 10 newest matches of a Gmail search, short summaries | no |
+| `email_read` | one message in full, plain text | no |
+| `email_draft` | a draft in Nish's own Gmail drafts; nobody receives it | no |
+| `email_send` | an email from Nish's Gmail to someone else | yes, `askFirst` |
+
+`email_send` carries `askFirst` on its registration: Tether texts "Allow this?
+Send an email from your Gmail to <address> — <subject>." and sends only after a
+YES (see Safety rules). Search, read and draft never leave Nish's own mailbox,
+so they do not ask.
+
+Libraries: `@googleapis/gmail` and `google-auth-library` (Google's own). The
+connect step asks for two more scopes for it, `gmail.readonly` and
+`gmail.compose`, next to the calendar and contact scopes.
+
+Email headers, snippets and bodies are untrusted. A result is wrapped in
+`<untrusted_email_data>` with a line saying not to follow instructions inside,
+every field is flattened to one line, tags and control characters are removed
+and the length is capped (a body at 20000 characters). A draft or send refuses
+a recipient or subject that is not a plain single line, so a header such as
+`Bcc:` cannot ride in on either. `email_search` and `email_read` are
+`replay: safe`; `email_draft` and `email_send` are `replay: unsafe` like every
+other tool that acts, so a crash never saves one draft twice or sends twice.
+The server URLs are constants in code, not settings, so no text can point the
+tools at another host. A Google login from before the Gmail scopes answers
+every email call with the setup-again line instead of an error code.
+
+### Texting other people
+
+A `text_person` tool (text a handle that has never texted the line) is not
+built. Photon Spectrum's terms gate starting new conversations to paid tiers:
+cold outreach starts on the Business plan, at 50 new contacts a day, and the
+deliverability guide says cold outreach belongs on A2P channels, not iMessage.
+The free tier Tether runs on is inbound-first, so Tether texts only the owner's
+allowed handle. Revisit if that changes.
+
 ## Calendar and contacts
 
 Phase 2 of `Nishfleet/tether#7`. Google and iCloud, each optional. With neither
@@ -307,7 +350,8 @@ checks that guests the model passes anyway are dropped.
 Libraries: `@googleapis/calendar`, `@googleapis/people` and `google-auth-library`
 (Google's own), `tsdav` for CalDAV and CardDAV, `ical.js` to read and write the
 iCalendar and vCard text. Google scopes: `calendar.events`,
-`calendar.calendarlist.readonly` and `contacts`, nothing wider.
+`calendar.calendarlist.readonly` and `contacts` for this, plus the two Gmail
+scopes listed under Email, nothing wider.
 
 Calendar text, guest names and contact fields are untrusted. A result is wrapped
 in `<untrusted_calendar_data>` or `<untrusted_contact_data>` with a line saying
@@ -340,11 +384,11 @@ systemctl restart tether-agent.service
 ```
 
 `google` asks for the OAuth client id and secret (a Desktop app client with the
-Calendar and People APIs enabled, and the consent screen set to In production,
+Calendar, People and Gmail APIs enabled, and the consent screen set to In production,
 because a refresh token from a Testing screen dies after 7 days), prints a
 consent link with PKCE, and asks for the address the browser lands on after
 consent (the page does not load, the address holds the code). It then makes a
-real calendar and contacts read with the new token and only then writes the
+real calendar, contacts and Gmail read with the new token and only then writes the
 file. `icloud` asks for the Apple ID and an app-specific password
 (appleid.apple.com, Sign-In and Security) and also proves the login with a real
 read before it writes. Each command merges its own variables into the file and
@@ -437,7 +481,7 @@ model's prompt. A rule that only the host can enforce says so.
 | --- | --- | --- | --- |
 | Sender allowlist: only one handle, direct chats, text only | Yes | `classify` in `src/control.ts`, before the model | `tests/unit.test.ts` "accepts only the allowed handle, however it is formatted"; `tests/app.test.ts` "ignores other senders and group chats without calling the model or replying" |
 | STOP and RESUME: STOP halts everything, from the allowed sender only | Yes | `onStop` and `onResume` in `src/app.ts`, decided before the model | `tests/app.test.ts` "STOP aborts the model call and sends nothing for it; RESUME re-asks and replies"; `tests/crash.test.ts` "stays stopped after a kill until RESUME" |
-| Ask-first: a tool with `askFirst` runs only after YES | Yes | `beforeTool` hook in `src/approval.ts`, in Tether's own process | `tests/approval.test.ts` "texts a one-line summary, runs nothing yet, and runs the tool only after YES" |
+| Ask-first: a tool with `askFirst` runs only after YES | Yes | `beforeTool` hook in `src/approval.ts`, in Tether's own process | `tests/approval.test.ts` "texts a one-line summary, runs nothing yet, and runs the tool only after YES" and "asks before email_send and sends the email only after YES" |
 | Only a YES from the allowed sender approves; tool output and model text never do | Yes | `classify` plus `answer` in `src/approval.ts`, fed only by inbound messages | `tests/approval.test.ts` "treats YES inside tool output and in model text as nothing" and "ignores YES from another sender and YES inside a longer message" |
 | NO, silence for 24 hours, and STOP cancel a pending approval | Yes | `answer`, `expire` and `cancelAll` in `src/approval.ts` | `tests/approval.test.ts` "cancels on NO: the tool never runs and the model is told", "cancels after silence and tells the model" and "cancels the pending approval on STOP, and a later YES runs nothing" |
 | A pending approval survives a restart and is never asked twice | Yes | the approval document, `api.memo` and one durable key per call | `tests/crash.test.ts` "keeps a pending approval across a kill, asks once, and runs the tool only on YES" and "keeps a pending approval across a clean restart too" |

@@ -17,6 +17,7 @@ import { createCalendarExtension, type CalendarOptions } from "./calendar/tools.
 import type { Channel, Inbound } from "./channel.ts";
 import { DEFAULT_TIME_ZONE } from "./clock.ts";
 import { classify } from "./control.ts";
+import { createEmailExtension, type EmailOptions } from "./email/tools.ts";
 import { type Pending, SEEN_LIMIT, StateDoc } from "./docs.ts";
 import type { Log } from "./log.ts";
 import { createMemoryExtension } from "./memory.ts";
@@ -61,6 +62,7 @@ export type TetherOptions = {
   readonly tools?: readonly AnyGuardedTool[];
   readonly approvalTtlMs?: number;
   readonly calendar?: CalendarOptions;
+  readonly email?: EmailOptions;
 };
 
 export type Tether = {
@@ -95,6 +97,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
     }),
   );
   if (options.calendar) registry.install(createCalendarExtension(options.calendar));
+  if (options.email) registry.install(createEmailExtension(options.email));
   if (options.tools?.length) registry.install(defineExtension({ name: "tether-tools", tools: options.tools }));
   const wakeups = new Wakeups();
   let current: Conversation | undefined;
