@@ -58,7 +58,7 @@ without the model. Text `RESUME` to continue.
   file and are listed in the system prompt of every request, so they survive
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
-  `reminder_list`, `reminder_cancel`, `location_request`, `location_last`,
+  `reminder_list`, `reminder_cancel`, `brief_set`, `brief_off`, `location_request`, `location_last`,
   `places_nearby` and `text_owner`, plus the calendar and contacts tools when an
   account is connected (see Calendar and contacts) and its own computer when
   configured (see Its own computer). Nothing else. Any tool that can act for Nish carries
@@ -146,6 +146,11 @@ lost.
 promised. iCloud Reminders that were upgraded to the current format are, as far
 as we can tell, not exposed over CalDAV, which is the only route a server has.
 Reminders live in Tether and arrive as iMessage texts.
+
+## Morning brief
+
+Every day at 08:00 (`TETHER_TIMEZONE`) Tether texts one brief: today's calendar events, reminders due today, and the weather (Open-Meteo, no key) at the last shared location. A source that is not connected or fails is skipped. Text "brief at 7:30" or "stop the brief" (`brief_set`, `brief_off`) to change it.
+It is one Pi Durable task (`tether.brief`) that sleeps until the next brief time, like a reminder, so a restart changes nothing. A brief more than 3 hours late is skipped, and nothing is sent while Tether is stopped.
 
 ## Location
 

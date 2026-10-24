@@ -2,15 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { startTether, type Tether } from "../src/app.ts";
+import { startTether, type Tether, type TetherOptions } from "../src/app.ts";
 import { createModelAccess } from "../src/model.ts";
-import type { Fetch } from "../src/places.ts";
 import { ALLOWED, FakeChannel, FakeModel, KEY } from "./helpers.ts";
 
 export class Rig {
   readonly dir = mkdtempSync(join(tmpdir(), "tether-rig-"));
   readonly model = new FakeModel();
-  readonly channel = new FakeChannel();
+  channel = new FakeChannel();
   readonly logs: { event: string; fields: Record<string, unknown> }[] = [];
   tether: Tether | undefined;
   private readonly waiters: { event: string; resolve: () => void }[] = [];
@@ -19,7 +18,7 @@ export class Rig {
     await this.model.start();
   }
 
-  async boot(extra: { fetch?: Fetch; timeZone?: string } = {}): Promise<Tether> {
+  async boot(extra: Partial<Pick<TetherOptions, "fetch" | "timeZone" | "calendar" | "now" | "setTimer">> = {}): Promise<Tether> {
     const { models, ref } = createModelAccess({ baseUrl: this.model.url, apiKey: KEY });
     this.tether = await startTether({
       channel: this.channel,
