@@ -1,7 +1,8 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
 import type { Log } from "./log.ts";
-import { describeAge, describeCoordinates, LocationDoc, type Coordinates } from "./location.ts";
+import type { Locations } from "./channel.ts";
+import { describeAge, describeCoordinates, type Coordinates } from "./location.ts";
 import { failure, text } from "./tool.ts";
 
 export const PLACES_HOST = "photon.komoot.io";
@@ -135,8 +136,8 @@ export function formatPlaces(places: readonly Place[]): string {
     .join("\n");
 }
 
-export function placesTool(options: { fetch: Fetch; userAgent: string; log: Log }) {
-  const { fetch: fetcher, userAgent, log } = options;
+export function placesTool(options: { fetch: Fetch; userAgent: string; log: Log; locations: Locations | undefined }) {
+  const { fetch: fetcher, userAgent, log, locations } = options;
   return defineTool({
     name: "places_nearby",
     description:
@@ -147,7 +148,7 @@ export function placesTool(options: { fetch: Fetch; userAgent: string; log: Log 
       radiusMeters: Type.Optional(Type.Integer({ minimum: 100, maximum: MAX_RADIUS_METERS })),
     }),
     replay: "safe",
-    execute: async (args, api, context) => {
+    execute: async (args, api) => {
       const radiusMeters = args.radiusMeters ?? DEFAULT_RADIUS_METERS;
       try {
         let center: Coordinates | undefined;
@@ -157,10 +158,10 @@ export function placesTool(options: { fetch: Fetch; userAgent: string; log: Log 
           if (!center) return failure(`Could not find a place called ${args.near}.`);
           origin = `near ${center.label ?? args.near}`;
         } else {
-          const saved = (await api.snapshot(LocationDoc, context))?.latest;
-          if (!saved) return failure("No saved location. Use location_request, or pass `near`.");
-          center = saved;
-          origin = `around the location shared ${describeAge(api.now(), saved.at)}`;
+          const found = await locations?.current();
+          if (!found) return failure("No known location. Use location_request, or pass `near`.");
+          center = found;
+          origin = `around the owner's Find My location from ${describeAge(api.now(), found.at)}`;
         }
         const places = await searchPlaces(fetcher, userAgent, { query: args.query, center, radiusMeters });
         if (places.length === 0) return text(`No "${args.query}" found within ${formatDistance(radiusMeters)} ${origin}. Try a wider radius or another word.`);
