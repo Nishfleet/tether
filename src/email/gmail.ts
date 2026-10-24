@@ -39,9 +39,20 @@ const sentAt = (item: gmail_v1.Schema$Message): Date | undefined => {
 
 const mimeSubject = (subject: string): string => {
   if (/^[\x20-\x7E]*$/.test(subject)) return subject;
-  const bytes = Buffer.from(subject, "utf8");
   const words: string[] = [];
-  for (let at = 0; at < bytes.length; at += 45) words.push(`=?UTF-8?B?${bytes.subarray(at, at + 45).toString("base64")}?=`);
+  let chunk = "";
+  let used = 0;
+  for (const char of subject) {
+    const size = Buffer.byteLength(char, "utf8");
+    if (used + size > 45 && chunk) {
+      words.push(`=?UTF-8?B?${Buffer.from(chunk, "utf8").toString("base64")}?=`);
+      chunk = "";
+      used = 0;
+    }
+    chunk += char;
+    used += size;
+  }
+  if (chunk) words.push(`=?UTF-8?B?${Buffer.from(chunk, "utf8").toString("base64")}?=`);
   return words.join("\r\n ");
 };
 

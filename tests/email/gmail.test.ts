@@ -117,7 +117,13 @@ it("gmail draft and send encode a non-ASCII subject as RFC 2047 words and leave 
     );
     await backend.send({ to: "asha@example.test", subject: "Réunion déjeuner", body: "À midi ?" });
     await backend.send({ to: "asha@example.test", subject: "Lunch", body: "Noon works." });
-    const subjects = google.sent.map((call) => Buffer.from(call.raw ?? "", "base64url").toString("utf8").split("\r\n").find((line) => line.startsWith("Subject:")) ?? "");
+    await backend.send({ to: "asha@example.test", subject: "🎉".repeat(30), body: "b" });
+    const subjectValue = (mime: string) => {
+      const start = mime.indexOf("Subject: ") + 9;
+      const end = mime.indexOf("\r\nContent-Type:");
+      return mime.slice(start, end).replace(/\r\n /g, "");
+    };
+    const subjects = google.sent.map((call) => subjectValue(Buffer.from(call.raw ?? "", "base64url").toString("utf8")));
     const words = (subjects[0] ?? "").match(/=\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=/g) ?? [];
     assert.ok(words.length > 0);
     assert.equal(
@@ -125,8 +131,14 @@ it("gmail draft and send encode a non-ASCII subject as RFC 2047 words and leave 
       "Réunion déjeuner",
     );
     for (const word of words) assert.ok(word.length <= 75);
-    assert.ok((subjects[0] ?? "").startsWith("Subject: =?UTF-8?B?"));
-    assert.equal(subjects[1], "Subject: Lunch");
+    assert.ok((subjects[0] ?? "").startsWith("=?UTF-8?B?"));
+    assert.equal(subjects[1], "Lunch");
+    const party = (subjects[2] ?? "").match(/=\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=/g) ?? [];
+    assert.ok(party.length > 1);
+    assert.equal(
+      party.map((word) => Buffer.from(word.slice(10, -2), "base64").toString("utf8")).join(""),
+      "🎉".repeat(30),
+    );
   } finally {
     await google.stop();
   }
