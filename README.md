@@ -5,8 +5,8 @@ Owner: **nish3451** (`.github/CODEOWNERS`: `* @nish3451`).
 Tether is a personal agent that chats over iMessage and runs on the VPS as a
 system unit. It does chat, its own memory notes, reminders and alarms, location
 over iMessage and nearby places, with crash-proofing under all of it. It has no
-shell, no GitHub, Cloudflare or database tokens, no deploys, and one fixed
-read-only web lookup (nearby places). The spec is `Nishfleet/fleet-ops#9980`. The unit, the service user, the
+shell, no GitHub, Cloudflare or database tokens, no deploys, and two fixed
+read-only web lookups (nearby places and the weather). The spec is `Nishfleet/fleet-ops#9980`. The unit, the service user, the
 firewall rule and the host config are owned by `Nishfleet/fleet-ops` (PR #9986,
 merged); this repo is the app.
 
@@ -57,7 +57,7 @@ without the model. Text `RESUME` to continue.
   file and are listed in the system prompt of every request, so they survive
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
-  `reminder_list`, `reminder_cancel`, `location_request`, `location_last`,
+  `reminder_list`, `reminder_cancel`, `brief_set`, `brief_off`, `location_request`, `location_last`,
   `places_nearby` and `text_owner`, plus the calendar and contacts tools when an
   account is connected (see Calendar and contacts) and its own computer when
   configured (see Its own computer). Nothing else. Any tool that can act for Nish carries
@@ -146,6 +146,12 @@ promised. iCloud Reminders that were upgraded to the current format are, as far
 as we can tell, not exposed over CalDAV, which is the only route a server has.
 Reminders live in Tether and arrive as iMessage texts.
 
+## Morning brief
+
+Every day at 08:00 (`TETHER_TIMEZONE`) Tether texts one brief: today's calendar events, reminders due today, and the weather where the owner is when the brief is due (Open-Meteo, no key, skipped when the owner is not sharing a location). A source that is not connected or fails is skipped. Text "brief at 7:30" or "stop the brief" (`brief_set`, `brief_off`) to change it.
+It is one Pi Durable task (`tether.brief`) that sleeps until the next brief time, like a reminder, so a restart changes nothing. A brief more than 3 hours late is skipped, and nothing is sent while Tether is stopped.
+The time and the on/off switch live in the durable document `tether.brief.settings`, so a restart keeps both.
+
 ## Location
 
 Tether reads the owner's location through Photon's Find My API, the `locations`
@@ -168,8 +174,9 @@ age, never coordinates. The owner approved reading his live Find My location on
 `places_nearby` searches around the owner's Find My location, or around a named
 place (`near`, geocoded first). It is a free, read-only lookup with no key and
 no paid places API: Photon (`https://photon.komoot.io/api/`), a search over
-OpenStreetMap data. It is the only web host Tether calls. The URL is a constant
-built in code, the model chooses only the search words, the name of the place
+OpenStreetMap data. Photon and Open-Meteo (the weather line in the brief) are
+the only web hosts Tether calls, and both are constants built in code. The
+model chooses only the search words, the name of the place
 and the radius (100 m to 5 km), redirects are refused, and a request times out
 after 10 seconds. The result is sorted by distance and each line has an Apple
 Maps link. Photon is a shared demo service for light use, which fits one owner.
@@ -185,6 +192,7 @@ system prompt tells the model to treat it as data.
 | --- | --- | --- |
 | Find My is read only for the allowed sender's own handle, never stored or logged with coordinates | yes, `createFindMy` takes the one owner address | `tests/findmy.test.ts` |
 | The lookup calls one fixed https host, with no redirects | yes, `PLACES_URL`, `redirect: "error"` | `tests/assist.test.ts`, `tests/location.test.ts` |
+| The weather lookup calls one fixed https host, with no redirects and a 10 s timeout | yes, `WEATHER_URL`, `redirect: "error"` | `tests/brief.test.ts` |
 | Reminders text only the owner's chat | yes, the space is saved from accepted messages only | `tests/assist.test.ts` |
 | STOP holds due reminders until RESUME | yes, `tether.reminder` checks the state in its sending commit and `RESUME` releases them | `tests/assist.test.ts`, `tests/reminder-crash.test.ts` |
 | A reminder survives a kill and is sent once | yes, durable sleep | `tests/reminder-crash.test.ts` |
