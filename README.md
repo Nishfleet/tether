@@ -306,11 +306,14 @@ connect step asks for two more scopes for it, `gmail.readonly` and
 Email headers, snippets and bodies are untrusted. A result is wrapped in
 `<untrusted_email_data>` with a line saying not to follow instructions inside,
 every field is flattened to one line, tags and control characters are removed
-and the length is capped (a body at 20000 characters). `email_search` and
-`email_read` are `replay: safe`; `email_send` is `replay: unsafe` like every
-other approval tool, so a crash never sends twice. The server URLs are
-constants in code, not settings, so no text can point the tools at another
-host.
+and the length is capped (a body at 20000 characters). A draft or send refuses
+a recipient or subject that is not a plain single line, so a header such as
+`Bcc:` cannot ride in on either. `email_search` and `email_read` are
+`replay: safe`; `email_draft` and `email_send` are `replay: unsafe` like every
+other tool that acts, so a crash never saves one draft twice or sends twice.
+The server URLs are constants in code, not settings, so no text can point the
+tools at another host. A Google login from before the Gmail scopes answers
+every email call with the setup-again line instead of an error code.
 
 ### Texting other people
 

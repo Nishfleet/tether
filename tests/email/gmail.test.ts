@@ -107,6 +107,31 @@ it("gmail read decodes a text/plain body, walks a multipart body, and falls back
   }
 });
 
+it("gmail draft and send encode a non-ASCII subject as RFC 2047 words and leave an ASCII subject alone", async () => {
+  const google = new FakeGoogle();
+  await google.start();
+  try {
+    const backend = gmailBackend(
+      { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET, refreshToken: REFRESH_TOKEN },
+      { tokenUrl: `${google.url}token`, gmailRoot: google.url },
+    );
+    await backend.send({ to: "asha@example.test", subject: "Réunion déjeuner", body: "À midi ?" });
+    await backend.send({ to: "asha@example.test", subject: "Lunch", body: "Noon works." });
+    const subjects = google.sent.map((call) => Buffer.from(call.raw ?? "", "base64url").toString("utf8").split("\r\n").find((line) => line.startsWith("Subject:")) ?? "");
+    const words = (subjects[0] ?? "").match(/=\?UTF-8\?B\?([A-Za-z0-9+/=]+)\?=/g) ?? [];
+    assert.ok(words.length > 0);
+    assert.equal(
+      words.map((word) => Buffer.from(word.slice(10, -2), "base64").toString("utf8")).join(""),
+      "Réunion déjeuner",
+    );
+    for (const word of words) assert.ok(word.length <= 75);
+    assert.ok((subjects[0] ?? "").startsWith("Subject: =?UTF-8?B?"));
+    assert.equal(subjects[1], "Subject: Lunch");
+  } finally {
+    await google.stop();
+  }
+});
+
 it("gmail draft and send hand the model's email to Gmail as one base64url MIME message and never deliver a draft", async () => {
   const google = new FakeGoogle();
   await google.start();

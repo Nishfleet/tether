@@ -10,6 +10,7 @@ export type EmailOptions = {
 };
 
 const EMAIL = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;
+const NEWLINE = /\r|\n/;
 const SUBJECT_CHARS = 200;
 const BODY_CHARS = 20000;
 
@@ -22,8 +23,18 @@ function describe(error: unknown): string {
   return error instanceof Error && error.name !== "Error" ? error.name : error instanceof Error ? error.message.slice(0, 120) : "unknown error";
 }
 
+const NEEDS_SETUP = /insufficient authentication scopes|access_denied/i;
+
+function fail(message: string, error: unknown) {
+  if (error instanceof Error && NEEDS_SETUP.test(error.message)) {
+    return failure(`${message} Google was connected without the Gmail scopes, so run setup again to grant them and restart Tether.`);
+  }
+  return failure(`${message} (${describe(error)}).`);
+}
+
 function check(email: { to: string; subject: string; body: string }): string | undefined {
-  if (!EMAIL.test(email.to)) return "The address must be a plain email address.";
+  if (!EMAIL.test(email.to) || NEWLINE.test(email.to)) return "The address must be a plain email address.";
+  if (NEWLINE.test(email.subject)) return "The subject must be a single line.";
   if (email.subject.length > SUBJECT_CHARS) return `The subject can be at most ${SUBJECT_CHARS} characters.`;
   return undefined;
 }
@@ -46,7 +57,7 @@ export function createEmailExtension(options: EmailOptions): Extension {
       try {
         found = await backend.search(args.query);
       } catch (error) {
-        return failure(`Gmail could not be searched (${describe(error)}).`);
+        return fail("Gmail could not be searched", error);
       }
       if (found.length === 0) return text("No matching email.");
       return text(wrap("email_data", found.map((email) => summaryLine(email, timezone))));
@@ -63,7 +74,7 @@ export function createEmailExtension(options: EmailOptions): Extension {
       try {
         email = await backend.read(args.id);
       } catch (error) {
-        return failure(`The email could not be read (${describe(error)}).`);
+        return fail("The email could not be read", error);
       }
       const head = [messageLine("From", email.from, CLEAR_VALUE), messageLine("To", email.to, CLEAR_VALUE), messageLine("Subject", email.subject, CLEAR_TITLE), `Date: ${stamp(email.date, timezone)}`];
       return text(wrap("email_data", [...head, clean(email.body, BODY_CHARS)]));
@@ -78,13 +89,14 @@ export function createEmailExtension(options: EmailOptions): Extension {
       subject: Type.String({ minLength: 1, maxLength: SUBJECT_CHARS }),
       body: Type.String({ minLength: 1, maxLength: BODY_CHARS }),
     }),
+    replay: "unsafe",
     execute: async (args) => {
       const bad = check(args);
       if (bad) return failure(bad);
       try {
         await backend.draft(args);
       } catch (error) {
-        return failure(`The draft was not saved (${describe(error)}).`);
+        return fail("The draft was not saved", error);
       }
       return text(`Draft saved in Gmail: to ${clean(args.to, CLEAR_VALUE)} — ${clean(args.subject, CLEAR_TITLE)}`);
     },
@@ -106,7 +118,7 @@ export function createEmailExtension(options: EmailOptions): Extension {
         try {
           await backend.send(args);
         } catch (error) {
-          return failure(`The email was not sent (${describe(error)}).`);
+          return fail("The email was not sent", error);
         }
         return text(`Sent to ${clean(args.to, CLEAR_VALUE)}: ${clean(args.subject, CLEAR_TITLE)}`);
       },

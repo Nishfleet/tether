@@ -151,15 +151,17 @@ it("email_draft saves through the backend and touches nobody's inbox", async () 
   assert.deepEqual(backend.sent, []);
 });
 
-it("email_draft and email_send refuse a bad address or an over-long subject without touching Gmail", async () => {
+it("email_draft and email_send refuse a bad address, an over-long subject, or a CR/LF in either, without touching Gmail", async () => {
   const backend = new FakeEmail();
   const { run } = setup(backend);
   const badAddress = { to: "asha example.test", subject: "s", body: "b" };
   const longSubject = { to: "asha@example.test", subject: "s".repeat(201), body: "b" };
+  const injectedSubject = { to: "asha@example.test", subject: "Lunch\r\nBcc: x@evil.test", body: "b" };
+  const injectedAddress = { to: "asha@example.test\r\nBcc: x@evil.test", subject: "s", body: "b" };
   for (const name of ["email_draft", "email_send"]) {
-    for (const args of [badAddress, longSubject]) {
+    for (const args of [badAddress, longSubject, injectedSubject, injectedAddress]) {
       const out = await run(name, args);
-      assert.match(out.text, /^(The address must be a plain email address\.|The subject can be at most 200 characters\.)$/);
+      assert.match(out.text, /^(The address must be a plain email address\.|The subject can be at most 200 characters\.|The subject must be a single line\.)$/);
     }
   }
   assert.deepEqual(backend.drafted, []);
@@ -181,5 +183,16 @@ it("email_send answers with a failure line when Gmail refuses the send", async (
   backend.error = new Error("550 rejected");
   const out = await run("email_send", { to: "asha@example.test", subject: "Lunch", body: "Noon?" });
   assert.equal(out.text, "The email was not sent (550 rejected).");
+  assert.deepEqual(backend.sent, []);
+});
+
+it("email tools point at setup again when the Google login lacks the Gmail scopes", async () => {
+  const backend = new FakeEmail();
+  const { run } = setup(backend);
+  backend.error = new Error("Request had insufficient authentication scopes.");
+  const searched = await run("email_search", { query: "q" });
+  assert.equal(searched.text, "Gmail could not be searched Google was connected without the Gmail scopes, so run setup again to grant them and restart Tether.");
+  const sent = await run("email_send", { to: "asha@example.test", subject: "Lunch", body: "b" });
+  assert.equal(sent.text, "The email was not sent Google was connected without the Gmail scopes, so run setup again to grant them and restart Tether.");
   assert.deepEqual(backend.sent, []);
 });

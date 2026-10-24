@@ -37,8 +37,16 @@ const sentAt = (item: gmail_v1.Schema$Message): Date | undefined => {
   return Number.isFinite(ms) && item.internalDate !== undefined ? new Date(ms) : undefined;
 };
 
+const mimeSubject = (subject: string): string => {
+  if (/^[\x20-\x7E]*$/.test(subject)) return subject;
+  const bytes = Buffer.from(subject, "utf8");
+  const words: string[] = [];
+  for (let at = 0; at < bytes.length; at += 45) words.push(`=?UTF-8?B?${bytes.subarray(at, at + 45).toString("base64")}?=`);
+  return words.join("\r\n ");
+};
+
 const raw = (email: NewEmail) =>
-  Buffer.from(`To: ${email.to}\r\nSubject: ${email.subject}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${email.body}`, "utf8").toString(
+  Buffer.from(`To: ${email.to}\r\nSubject: ${mimeSubject(email.subject)}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${email.body}`, "utf8").toString(
     "base64url",
   );
 
