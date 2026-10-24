@@ -59,7 +59,7 @@ without the model. Text `RESUME` to continue.
   restarts. The thread itself is the durable conversation in that file.
 - **Tools.** `memory_save`, `memory_forget`, `time_now`, `reminder_set`,
   `reminder_list`, `reminder_cancel`, `location_request`, `location_last`,
-  `places_nearby`, `web_search`, `web_read` (loads a link without asking only when it came from Nish's text or a `web_search` result in this task, and asks YES/NO first for any other, showing the full link) and `text_owner`, plus the calendar
+  `places_nearby`, `web_search`, `web_read` (loads a link without asking only when it came from Nish's text or a `web_search` result since his latest text, and asks YES/NO first for any other, showing the full link) and `text_owner`, plus the calendar
   and contacts tools when an
   account is connected (see Calendar and contacts) and its own computer when
   configured (see Its own computer). Nothing else. Any tool that can act for Nish carries
@@ -222,7 +222,7 @@ exa.ai/pricing 2026-10-24), and one search costs about $0.007, so 300 searches a
 month draws about $2 of it. Tether holds no Exa balance and cannot top one up.
 With the key unset the tool answers that search is not set up and calls nothing.
 
-`web_read(url)` loads a link without asking only when it came from Nish's own text or from a `web_search` result in this task; any other link asks YES/NO first with the full URL shown, so a link in an email or page cannot carry his data out (the allowed links live in memory, `Links` in `src/web.ts`, and a restart forgets them, which only means one more ask). It fetches one page and returns its article text through
+`web_read(url)` loads a link without asking only when it came from Nish's own text or from a `web_search` result since Nish's latest text; any other link asks YES/NO first with the full URL shown, so a link in an email or page cannot carry his data out (the allowed links live in memory, `Links` in `src/web.ts`, and a restart forgets them, which only means one more ask). It fetches one page and returns its article text through
 `@mozilla/readability`, the reader view Firefox uses, over `linkedom`. Menus,
 scripts and footers are dropped. It shows at most 20000 characters, reads at
 most 2000000 bytes, and gives up after 15 seconds. Only an http or https link to
@@ -245,7 +245,7 @@ search result is never an instruction.
 | The search calls one fixed https host, with the key in a header and no redirects | yes, `SEARCH_URL`, `redirect: "error"` | `tests/assist.test.ts` "searches the web, then reads a result in full" |
 | A failed search or read is reported to the model with its event logged, and the key is not in the log | yes, the `catch` in each tool, `log("web_search_failed")` and `log("web_read_failed")` | `tests/web.test.ts` "reports a failed search"; `tests/assist.test.ts` "refuses a link that is not public" |
 | Web text is data, not instructions | instruction only; both tools can only read | none |
-| `web_read` opens only a link from Nish's text or this task's search results, and asks first for any other | yes, `askFirst` on `web_read`, `Links` in `src/web.ts` | `tests/assist.test.ts` "asks first for a link that came only from page text" and "fetches the asked link only after YES" |
+| `web_read` opens only a link from Nish's text or the search results since his latest text, and asks first for any other | yes, `askFirst` on `web_read`, `Links` in `src/web.ts` | `tests/assist.test.ts` "asks first for a link that came only from page text" and "fetches the asked link only after YES" |
 
 ## Long replies
 

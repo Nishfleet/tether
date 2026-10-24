@@ -94,6 +94,20 @@ function normal(url: URL): string {
   return copy.toString();
 }
 
+const CLOSERS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+const count = (value: string, char: string) => value.split(char).length - 1;
+
+// Drops sentence punctuation after a link, and a closing bracket the link never opened.
+function trimLink(raw: string): string {
+  let link = raw.replace(/[.,;:!?]+$/, "");
+  for (;;) {
+    const last = link.at(-1) ?? "";
+    const opener = CLOSERS[last];
+    if (opener === undefined || count(link, last) <= count(link, opener)) return link;
+    link = link.slice(0, -1).replace(/[.,;:!?]+$/, "");
+  }
+}
+
 // Links web_read opens without asking: the owner's own texts and this task's search results.
 export class Links {
   private readonly owner = new Set<string>();
@@ -102,13 +116,14 @@ export class Links {
   private static add(into: Set<string>, raw: string): void {
     const url = pageTarget(raw);
     if (!url) return;
+    into.delete(normal(url));
     into.add(normal(url));
     const oldest = into.values().next();
     if (into.size > LINK_LIMIT && !oldest.done) into.delete(oldest.value);
   }
 
   fromOwner(message: string): void {
-    for (const match of message.match(LINK_PATTERN) ?? []) Links.add(this.owner, match.replace(/[.,;:!?)\]}]+$/, ""));
+    for (const match of message.match(LINK_PATTERN) ?? []) Links.add(this.owner, trimLink(match));
   }
 
   fromSearch(results: readonly Result[]): void {
@@ -203,7 +218,7 @@ export function webTools(options: { fetch: Fetch; userAgent: string; log: Log; l
     replay: "safe",
     askFirst: (args) => {
       const target = pageTarget(args.url);
-      return target && !links.allows(target) ? `Open ${target.toString()} (this link did not come from you or a search).` : undefined;
+      return target && !links.allows(target) ? `Open this link? It did not come from you or a search: ${target.toString()}` : undefined;
     },
     execute: async (args) => {
       const target = pageTarget(args.url);
