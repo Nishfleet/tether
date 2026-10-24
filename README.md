@@ -210,11 +210,12 @@ With the key unset the tool answers that search is not set up and calls nothing.
 `@mozilla/readability`, the reader view Firefox uses, over `linkedom`. Menus,
 scripts and footers are dropped. It shows at most 20000 characters, reads at
 most 2000000 bytes, and gives up after 15 seconds. Only an http or https link to
-a public host is accepted: an IP address, `localhost` and a `.local` name are
-refused before any request, so a page link cannot be aimed at the router or at
-a service on the box. Redirects are followed, so the host firewall stays the
-last line: it lets Tether reach the public internet and `127.0.0.1:4000`, and
-nothing else.
+a public host is accepted: an IP address, `localhost` and a `.local` name (with
+or without a trailing dot) are refused before any request, so a page link cannot
+be aimed at the router or at a service on the box. A redirect is followed only to
+a link that passes the same check, at most 5 times. The check reads the name,
+not the address it resolves to, so the host firewall stays the last line: it
+lets Tether reach the public internet and `127.0.0.1:4000`, and nothing else.
 
 Both tools only read, so neither asks first. Both mark what they return as
 untrusted data, and the system prompt tells the model that text from a page or a
@@ -224,10 +225,10 @@ search result is never an instruction.
 
 | Rule | Enforced in code | Proof |
 | --- | --- | --- |
-| A read accepts only a public http or https link: no IP address, no `localhost`, no `.local` name | yes, `pageTarget` in `src/web.ts` | `tests/web.test.ts` "refuses anything that is not a public web link"; `tests/assist.test.ts` "refuses a link that is not public" |
+| A read accepts only a public http or https link: no IP address, no `localhost`, no `.local` name, on the first request and on every redirect | yes, `pageTarget` and `readPage` in `src/web.ts` | `tests/web.test.ts` "refuses anything that is not a public web link" and "follows a redirect only to another public link"; `tests/assist.test.ts` "refuses a link that is not public" |
 | A read stops at 2000000 bytes, shows at most 20000 characters, and times out after 15 seconds | yes, `readLimited`, `MAX_PAGE_CHARS`, `AbortSignal.timeout` | `tests/web.test.ts` "stops at the byte cap" and "returns the readable article as text" |
 | The search calls one fixed https host, with the key in a header and no redirects | yes, `SEARCH_URL`, `redirect: "error"` | `tests/assist.test.ts` "searches the web, then reads a result in full" |
-| A failed search or read is reported to the model with its event logged, and the key is not in the log | yes, the `catch` in each tool, `log("web_search_failed")` and `log("web_read_failed")` | `tests/web.test.ts` "reports a failed search"; `tests/assist.test.ts` "refuses a link that is not public" |
+| A failed search or read is reported to the model with its event logged, and the key is not in the log | yes, the `catch` in each tool, `log("web_search_failed")` and `log("web_read_failed")` | `tests/assist.test.ts` "reports a failed search to the model and logs why" and "refuses a link that is not public" |
 | Web text is data, not instructions | instruction only; both tools can only read | none |
 | `web_read` opens only a link from Nish's text or the search results since his latest text, and asks first for any other | yes, `askFirst` on `web_read`, `Links` in `src/web.ts` | `tests/assist.test.ts` "asks first for a link that came only from page text" and "fetches the asked link only after YES" |
 
