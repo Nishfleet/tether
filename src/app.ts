@@ -120,7 +120,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
   const root: Conversation = await harness.root(context, { agent: { model: options.model, instructions: INSTRUCTIONS } });
   current = root;
   await root.configure({ model: options.model, instructions: INSTRUCTIONS }, context);
-  await root.commit((tx) => startBrief(tx, brief, root.id, (options.now ?? Date.now)(), timeZone), context);
+  await root.commit((tx) => startBrief(tx, brief, root.id, (options.now ?? Date.now)(), timeZone, log), context);
 
   const claim = (state: { seen: string[] }, id: string): boolean => {
     if (state.seen.includes(id)) return false;

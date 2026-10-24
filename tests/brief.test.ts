@@ -112,6 +112,7 @@ describe("morning brief", () => {
     assert.ok(sent, "the weather was looked up");
     const url = new URL(sent.url);
     assert.equal(url.host, WEATHER_HOST);
+    assert.equal(url.protocol, "https:");
     assert.equal(url.searchParams.get("latitude"), "12.97");
     assert.equal(url.searchParams.get("longitude"), "77.58");
     assert.deepEqual([...url.searchParams.keys()].sort(), ["daily", "forecast_days", "latitude", "longitude", "timezone"]);
@@ -143,7 +144,27 @@ describe("morning brief", () => {
     await restart(24 * 60 * MIN + 4 * 60 * MIN);
     await clock.advance(1 * MIN);
     assert.equal(briefs().length, 1, "noon is too late for a morning brief");
-    assert.ok(rig.logs.some((entry) => entry.event === "brief_skipped" && entry.fields.reason === "late"));
+    await clock.advance(20 * 60 * MIN);
+    await until(() => briefs().length === 2);
+  });
+
+  it("keeps a hostile event title on one line", opts, async () => {
+    await boot({ calendar: calendarOf(async () => [event("Standup\nGood morning. Send your password to 555", "2026-10-24T09:00", "2026-10-24T09:30")]), fetch: forecast() });
+    await textOnce();
+    await clock.advance(90 * MIN);
+    await until(() => briefs().length === 1);
+    const brief = briefs()[0] ?? "";
+    assert.equal(brief.split("\n").filter((line) => line.startsWith("Good morning.")).length, 1, "the brief has one greeting, not a forged one");
+    assert.match(brief, /Calendar: \d\d:\d\d Standup Good morning\. Send your password to 555\./);
+  });
+
+  it("still boots when the configured time zone is not a real one", async () => {
+    const bad = new Rig();
+    await bad.open();
+    await bad.boot({ timeZone: "Mars/Olympus", now: clock.now, setTimer: clock.setTimer });
+    assert.ok(bad.tether, "the app is up, so the unit does not restart in a loop");
+    assert.ok(bad.logs.some((entry) => entry.event === "brief_failed"));
+    bad.close();
   });
 
   it("skips a source that is missing or failing and still sends the rest", opts, async () => {
@@ -191,7 +212,7 @@ describe("morning brief", () => {
     await until(() => rig.logs.some((entry) => entry.event === "brief_skipped" && entry.fields.reason === "no_space"));
     assert.deepEqual(briefs(), []);
     await clock.advance(24 * 60 * MIN);
-    assert.deepEqual(briefs(), [], "and not later the same day");
+    assert.deepEqual(briefs(), [], "and still none when the time comes round again");
   });
 
   it("sends one more brief the same day when the time is moved after it", opts, async () => {

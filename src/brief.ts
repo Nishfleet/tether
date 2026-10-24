@@ -58,7 +58,7 @@ export function nextBriefAt(after: number, time: string, zone: string): number {
     const at = parseWhen(`${day}T${time}`, zone)?.date.getTime();
     if (at !== undefined && at > after) return at;
   }
-  return addDays(new Date(after), zone, 1).getTime();
+  return after + 86_400_000;
 }
 
 const clock = (ms: number, zone: string) => new Intl.DateTimeFormat("en-GB", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms));
@@ -221,10 +221,15 @@ async function schedule(tx: Tx, task: BriefTask, conversationId: ConversationId,
   await tx.createTask(task, { gen: brief.gen, at: brief.at }, { ownership: { kind: "conversation" }, conversationId, background: true });
 }
 
-export async function startBrief(tx: Tx, task: BriefTask, conversationId: ConversationId, now: number, timeZone: string): Promise<void> {
+export async function startBrief(tx: Tx, task: BriefTask, conversationId: ConversationId, now: number, timeZone: string, log: Log): Promise<void> {
   const brief = await tx.doc(BriefDoc);
   if (brief.time === null) return;
-  await schedule(tx, task, conversationId, now, timeZone, brief.time, brief.at ?? undefined);
+  const stale = brief.at !== null && now - brief.at > LATE_MS;
+  try {
+    await schedule(tx, task, conversationId, now, timeZone, brief.time, stale ? nextBriefAt(now - LATE_MS, brief.time, timeZone) : (brief.at ?? undefined));
+  } catch (error) {
+    log("brief_failed", { error: error instanceof Error ? error.name : "unknown" });
+  }
 }
 
 export function briefTools(options: { task: BriefTask; timeZone: string }) {

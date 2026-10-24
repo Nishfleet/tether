@@ -9,7 +9,7 @@ import { ALLOWED, FakeChannel, FakeModel, KEY } from "./helpers.ts";
 export class Rig {
   readonly dir = mkdtempSync(join(tmpdir(), "tether-rig-"));
   readonly model = new FakeModel();
-  channel = new FakeChannel();
+  readonly channel = new FakeChannel();
   readonly logs: { event: string; fields: Record<string, unknown> }[] = [];
   tether: Tether | undefined;
   private readonly waiters: { event: string; resolve: () => void }[] = [];
