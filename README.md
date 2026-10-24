@@ -118,6 +118,27 @@ without the model. Text `RESUME` to continue.
   restart neither repeats nor drops a notice. Replies that fail outright (the
   fixed apology) say nothing about the tier and leave it unchanged.
 
+### Daily caps spent
+
+The daily caps are set on the router, not in the app: 50 USD/day on Claude
+Sonnet 5.5, 5 USD/day on DeepSeek V4.1 Flash, and 55 USD/day on Tether's router
+key. When the total is spent the router refuses every call with a LiteLLM
+budget error (HTTP 400, type `budget_exceeded`, message `Budget has been
+exceeded!`).
+
+- Tether tells that error apart from every other model error by matching
+  `budget_exceeded` or `Budget has been exceeded` in the error text that Pi
+  durable stores as the `detail` of an `unanswered` / `model_error` input. Any
+  other error keeps the fixed apology.
+- On the first such error of a day it sends the owner one text, `Both model
+  budgets are spent, back after 00:00 UTC.`, instead of the apology. A second
+  budget error that day sends nothing (the `budget_exceeded` log line says
+  `texted: false`).
+- Nothing needs clearing at midnight: the router starts answering again and the
+  next text is answered normally. The UTC day of the last text is a durable
+  document in the SQLite file, so a restart on the same day stays quiet and the
+  caps running out again on a later day sends one new text.
+
 ## Reminders and alarms
 
 `reminder_set` takes a text and either `inMinutes` or `at` (ISO 8601 with a UTC

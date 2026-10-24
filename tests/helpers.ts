@@ -30,6 +30,7 @@ export type Reply = (
   | { kind: "tools"; calls: { name: string; args: Record<string, unknown> }[] }
   | { kind: "hold" }
   | { kind: "fail" }
+  | { kind: "budget" }
 ) & { via?: Via };
 
 export const via = <T extends Reply>(reply: T, served: Via): T => ({ ...reply, via: served });
@@ -38,6 +39,7 @@ export const say = (text: string): Reply => ({ kind: "text", text });
 export const cut = (text: string): Reply => ({ kind: "cut", text });
 export const call = (name: string, args: Record<string, unknown>): Reply => ({ kind: "tool", name, args });
 export const fail = (): Reply => ({ kind: "fail" });
+export const budget = (): Reply => ({ kind: "budget" });
 export const hold = (): Reply => ({ kind: "hold" });
 
 export function flatten(request: ChatRequest): string {
@@ -105,6 +107,11 @@ export class FakeModel {
     const reply = this.script.shift() ?? this.fallback?.(request) ?? say("(no scripted reply)");
     if (reply.kind === "fail") {
       res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "upstream down" } }));
+      return;
+    }
+    if (reply.kind === "budget") {
+      const error = { message: "Budget has been exceeded! Current cost: 55.2, Max budget: 55.0", type: "budget_exceeded", param: null, code: "400" };
+      res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error }));
       return;
     }
     if (reply.kind === "hold") {
