@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { NOTE, MAX_HTML_BYTES, MAX_PAGE_CHARS, SEARCH_RESULTS, SEARCH_URL, SNIPPET_CHARS, clean, formatResults, pageTarget, readPage, searchWeb } from "../src/web.ts";
+import { NOTE, MAX_HTML_BYTES, MAX_PAGE_CHARS, SEARCH_RESULTS, SEARCH_URL, SNIPPET_CHARS, clean, formatResults, pageTarget, readPage, reason, searchWeb, webTools } from "../src/web.ts";
 
 type Seen = { url: string; init: { headers: Record<string, string>; redirect: string; method?: string; body?: string } };
 
@@ -135,5 +135,21 @@ describe("web read", () => {
 
   it("tidies whitespace", () => {
     assert.equal(clean(" a  b \n\n\n\n c \n"), "a b\n\nc");
+  });
+});
+
+describe("web tools", () => {
+  it("names the reason a call failed, so a dead host is not just a type name", () => {
+    assert.equal(reason(Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } })), "ENOTFOUND");
+    assert.equal(reason(new TypeError("fetch failed")), "TypeError");
+    assert.equal(reason(new Error("search status 500")), "Error");
+    assert.equal(reason("nope"), "unknown");
+  });
+
+  it("offers the two read-only tools, neither asking first", () => {
+    const tools = webTools({ fetch: async () => new Response(""), userAgent: "tether-test", log: () => {}, searchApiKey: "k" });
+    assert.deepEqual(tools.map((tool) => tool.name), ["web_search", "web_read"]);
+    for (const tool of tools) assert.equal("askFirst" in tool, false);
+    for (const tool of tools) assert.equal(tool.replay, "safe");
   });
 });

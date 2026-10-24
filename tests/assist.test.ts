@@ -290,11 +290,11 @@ describe("web search and reading", () => {
     "<!doctype html><html><head><title>Kombucha</title></head><body><nav>Home About</nav>" +
     `<article><p>${"Kombucha is a fermented tea. ".repeat(20)}</p></article><script>alert(1)</script></body></html>`;
 
-  const web = (seen: Seen[], pageStatus = 200) => async (url: string, init: Seen["init"]) => {
+  const web = (seen: Seen[], pageStatus = 200, searchStatus = 200) => async (url: string, init: Seen["init"]) => {
     seen.push({ url, init });
     if (url === SEARCH_URL) {
       const results = [{ title: "Kombucha", url: "https://tea.test/kombucha", text: "A fermented tea.", publishedDate: "2026-10-01T00:00:00.000Z" }];
-      return new Response(JSON.stringify({ results }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ results }), { status: searchStatus, headers: { "content-type": "application/json" } });
     }
     return new Response(PAGE, { status: pageStatus, headers: { "content-type": "text/html; charset=utf-8" } });
   };
@@ -318,6 +318,17 @@ describe("web search and reading", () => {
     assert.equal(seen[0]?.init.headers["x-api-key"], "exa-key");
     assert.equal(seen[0]?.init.redirect, "error");
     assert.equal(seen[1]?.init.redirect, "follow");
+  });
+
+  it("reports a failed search to the model and logs why", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_search", { query: "tea" }), say("Search failed."));
+    await rig.boot({ fetch: web(seen, 200, 500), searchApiKey: "exa-key" });
+    rig.channel.push(inbound("m1", "look it up"));
+    await rig.channel.sentCount(1);
+    assert.match(flatten(rig.model.requests[1] as never), /web search failed/i);
+    assert.ok(rig.logs.some((entry) => entry.event === "web_search_failed" && entry.fields.error === "Error"));
+    assert.equal(seen.length, 1);
   });
 
   it("says search is not set up when no key is configured, without calling out", opts, async () => {

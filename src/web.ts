@@ -33,6 +33,12 @@ type HtmlDocument = ConstructorParameters<typeof Readability>[0];
 
 const str = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 
+export function reason(error: unknown): string {
+  const cause = error instanceof Error ? (error.cause as { code?: unknown } | undefined) : undefined;
+  if (typeof cause?.code === "string") return cause.code;
+  return error instanceof Error ? error.name : "unknown";
+}
+
 export async function searchWeb(fetcher: Fetch, apiKey: string, query: string): Promise<Result[]> {
   const response = await fetcher(SEARCH_URL, {
     method: "POST",
@@ -141,7 +147,7 @@ export function webTools(options: { fetch: Fetch; userAgent: string; log: Log; s
         const results = await searchWeb(fetcher, searchApiKey, args.query);
         return results.length === 0 ? text(`No results for "${args.query}".`) : text(formatResults(args.query, results));
       } catch (error) {
-        log("web_search_failed", { error: error instanceof Error ? error.name : "unknown" });
+        log("web_search_failed", { error: reason(error) });
         return failure("The web search failed. Try again in a moment.");
       }
     },
@@ -162,11 +168,11 @@ export function webTools(options: { fetch: Fetch; userAgent: string; log: Log; s
         const title = page.title === "" ? "" : `${page.title}\n`;
         return text(`${title}${page.url}\n\n${page.text.slice(0, MAX_PAGE_CHARS)}${cutoff}\n${NOTE}`);
       } catch (error) {
-        log("web_read_failed", { error: error instanceof Error ? error.name : "unknown" });
+        log("web_read_failed", { error: reason(error) });
         return failure("The page could not be read. Try another link.");
       }
     },
   });
 
-  return [search, read];
+  return [search, read] as const;
 }
