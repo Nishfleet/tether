@@ -15,8 +15,6 @@ export async function commitStopWithoutAbort(stateDir: string): Promise<void> {
   await harness.commit(async (tx) => {
     const state = await tx.doc(StateDoc);
     state.stopped = true;
-    state.held.push(...state.inflight.map((item) => ({ ...item })));
-    state.inflight.splice(0, state.inflight.length);
   }, BACKGROUND_CONTEXT);
   await harness.close(BACKGROUND_CONTEXT);
 }

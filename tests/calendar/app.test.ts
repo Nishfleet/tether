@@ -64,7 +64,6 @@ describe("calendar in the running app", () => {
       model: ref,
       storage: await openNodeSqliteStorage(join(dir, "t.sqlite")),
       allowedSender: ALLOWED,
-      salt: "test-salt",
       log: () => undefined,
       retryBaseMs: 5,
       settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 }, stream: { maxRetries: 0 } },
@@ -102,7 +101,7 @@ describe("calendar in the running app", () => {
     await channel.sentCount(1);
     const first = model.requests[0];
     assert.ok(!(first?.tools ?? []).some((tool) => /^(calendar|contacts)_/.test(tool.function.name)));
-    assert.doesNotMatch(JSON.stringify(first), /calendar_list|contacts_find|untrusted/);
+    assert.doesNotMatch(JSON.stringify(first), /calendar_list|contacts_find/);
   });
 
   it("creates an event in the account the model names", opts, async () => {

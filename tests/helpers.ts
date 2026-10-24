@@ -6,20 +6,14 @@ export const KEY = "test-router-key";
 export const ALLOWED = "owner@example.test";
 export const SPACE = "space-1";
 
+const MODEL = "claude-sonnet-5-5";
+
 export type ChatRequest = {
   model: string;
   stream?: boolean;
   max_tokens?: number;
   messages: { role: string; content?: unknown; tool_calls?: unknown; tool_call_id?: string }[];
   tools?: { function: { name: string } }[];
-};
-
-export type Via = { model: string; headers: Record<string, string> };
-
-export const PRIMARY_VIA: Via = { model: "claude-sonnet-5-5", headers: { "x-litellm-model-id": "deployment-claude" } };
-export const BACKUP_VIA: Via = {
-  model: "deepseek-v4.1-flash",
-  headers: { "x-litellm-model-id": "deployment-backup", "x-litellm-attempted-fallbacks": "1" },
 };
 
 export type Reply = (
@@ -30,9 +24,7 @@ export type Reply = (
   | { kind: "tools"; calls: { name: string; args: Record<string, unknown> }[] }
   | { kind: "hold" }
   | { kind: "fail" }
-) & { via?: Via };
-
-export const via = <T extends Reply>(reply: T, served: Via): T => ({ ...reply, via: served });
+);
 
 export const say = (text: string): Reply => ({ kind: "text", text });
 export const cut = (text: string): Reply => ({ kind: "cut", text });
@@ -109,12 +101,11 @@ export class FakeModel {
     }
     if (reply.kind === "hold") {
       res.writeHead(200, { "content-type": "text/event-stream" });
-      res.write(`data: ${JSON.stringify(chunkOf(PRIMARY_VIA.model, { role: "assistant", content: "" }, null))}\n\n`);
+      res.write(`data: ${JSON.stringify(chunkOf(MODEL, { role: "assistant", content: "" }, null))}\n\n`);
       return;
     }
-    const served = reply.via ?? PRIMARY_VIA;
-    const chunk = (delta: Record<string, unknown>, finish: string | null) => chunkOf(served.model, delta, finish);
-    res.writeHead(200, { "content-type": "text/event-stream", ...served.headers });
+    const chunk = (delta: Record<string, unknown>, finish: string | null) => chunkOf(MODEL, delta, finish);
+    res.writeHead(200, { "content-type": "text/event-stream" });
     if (reply.kind === "toolText") {
       const delta = {
         role: "assistant",

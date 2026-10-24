@@ -1,22 +1,8 @@
 import { defineDoc } from "@earendil-works/pi-durable";
-import type { Tier } from "./tier.ts";
-
-export type Pending = {
-  inbound: string;
-  space: string;
-  prompt: string;
-  run: number;
-};
 
 export type State = {
   stopped: boolean;
-  held: Pending[];
-  inflight: Pending[];
   seen: string[];
-};
-
-export type TierState = {
-  tier: Tier | null;
 };
 
 export type Note = {
@@ -37,7 +23,7 @@ export const StateDoc = defineDoc<State>({
   kind: "tether.state",
   version: 1,
   scope: "session",
-  initial: () => ({ stopped: false, held: [], inflight: [], seen: [] }),
+  initial: () => ({ stopped: false, seen: [] }),
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
 });
 
@@ -46,13 +32,5 @@ export const MemoryDoc = defineDoc<Memory>({
   version: 1,
   scope: "session",
   initial: () => ({ notes: [] }),
-  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
-});
-
-export const TierDoc = defineDoc<TierState>({
-  kind: "tether.tier",
-  version: 1,
-  scope: "session",
-  initial: () => ({ tier: null }),
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
 });

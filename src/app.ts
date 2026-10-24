@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
@@ -17,12 +16,11 @@ import { createCalendarExtension, type CalendarOptions } from "./calendar/tools.
 import type { Channel, Inbound } from "./channel.ts";
 import { DEFAULT_TIME_ZONE } from "./clock.ts";
 import { classify } from "./control.ts";
-import { type Pending, SEEN_LIMIT, StateDoc } from "./docs.ts";
+import { SEEN_LIMIT, StateDoc } from "./docs.ts";
 import type { Log } from "./log.ts";
 import { createMemoryExtension } from "./memory.ts";
 import { rememberSpace } from "./owner.ts";
 import type { Fetch } from "./places.ts";
-import { releaseHeldReminders } from "./reminders.ts";
 import { createReplyTask, type ReplyInput } from "./reply.ts";
 
 export const INSTRUCTIONS = [
@@ -52,7 +50,6 @@ export type TetherOptions = {
   readonly model: ModelRef;
   readonly storage: Storage;
   readonly allowedSender: string;
-  readonly salt: string;
   readonly log: Log;
   readonly retryBaseMs?: number;
   readonly timeZone?: string;
@@ -68,20 +65,14 @@ export type Tether = {
   stop(): Promise<void>;
 };
 
-const fingerprint = (salt: string, value: string) => createHash("sha256").update(`${salt}:${value}`).digest("hex").slice(0, 8);
+const reply = (message: Inbound, prompt: string): ReplyInput => ({ space: message.space, inbound: message.id, prompt, notice: null, run: 0 });
 
-function reply(item: Pending): ReplyInput {
-  return { space: item.space, inbound: item.inbound, prompt: item.prompt, notice: null, run: item.run };
-}
-
-function notice(space: string, text: string): ReplyInput {
-  return { space, inbound: null, prompt: null, notice: text, run: 0 };
-}
+const notice = (space: string, text: string): ReplyInput => ({ space, inbound: null, prompt: null, notice: text, run: 0 });
 
 export async function startTether(options: TetherOptions): Promise<Tether> {
-  const { channel, log, allowedSender, salt } = options;
+  const { channel, log, allowedSender } = options;
   const context = BACKGROUND_CONTEXT;
-  const task = createReplyTask({ channel, log, retryBaseMs: options.retryBaseMs ?? 5000, group: options.model.modelId });
+  const task = createReplyTask({ channel, log, retryBaseMs: options.retryBaseMs ?? 5000 });
   const registry = createRegistry();
   registry.install(createMemoryExtension([task]));
   registry.install(
@@ -136,10 +127,8 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
       const state = await tx.doc(StateDoc);
       if (!claim(state, message.id)) return "duplicate";
       if (state.stopped) return "stopped";
-      const item: Pending = { inbound: message.id, space: message.space, prompt: text, run: 0 };
-      state.inflight.push(item);
       await rememberSpace(tx, message.space);
-      await queue(tx, reply(item));
+      await queue(tx, reply(message, text));
       return "accepted";
     }, context);
 
@@ -153,8 +142,6 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
       }
       state.stopped = true;
       await cancelAll(tx);
-      state.held.push(...state.inflight.map((item) => ({ ...item })));
-      state.inflight.splice(0, state.inflight.length);
       return "stopped";
     }, context);
     if (outcome !== "stopped") return outcome;
@@ -180,21 +167,14 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
         return "not_stopped";
       }
       state.stopped = false;
-      const held = state.held.map((item) => ({ ...item, run: item.run + 1 }));
-      state.held.splice(0, state.held.length);
-      for (const item of held) {
-        state.inflight.push(item);
-        await queue(tx, reply(item));
-      }
       await queue(tx, notice(message.space, RESUMED_TEXT));
-      await releaseHeldReminders(tx, task, root.id);
       return "resumed";
     }, context);
 
   const handle = async (message: Inbound): Promise<void> => {
     const verdict = classify(message, allowedSender);
     if (verdict.kind === "ignore") {
-      log("ignored", { id: message.id, reason: verdict.reason, from: fingerprint(salt, message.sender) });
+      log("ignored", { id: message.id, reason: verdict.reason });
       return;
     }
     let outcome: string;

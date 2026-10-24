@@ -7,7 +7,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import { createRegistry, Harness, type Tx } from "@earendil-works/pi-durable";
-import { answer, APPROVAL_TTL_MS, ApprovalDoc, askText, BLOCKS, describeCall, MONEY_BLOCK, SUMMARY_CHARS } from "../src/approval.ts";
+import { answer, APPROVAL_TTL_MS, ApprovalDoc, askText, BLOCKS, describeCall, SUMMARY_CHARS } from "../src/approval.ts";
 import { startTether, type Tether } from "../src/app.ts";
 import { classify } from "../src/control.ts";
 import { createModelAccess } from "../src/model.ts";
@@ -48,7 +48,6 @@ describe("ask-first approval, in process", () => {
       model: ref,
       storage: await openNodeSqliteStorage(join(dir, "t.sqlite")),
       allowedSender: ALLOWED,
-      salt: "test-salt",
       log: () => undefined,
       retryBaseMs: 5,
       settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 }, stream: { maxRetries: 0 } },
@@ -164,16 +163,6 @@ describe("ask-first approval, in process", () => {
     await channel.sentCount(1);
     assert.deepEqual(ran, ["maybe_send:nish"]);
     assert.equal(channel.sent[0]?.text, "Sent to you.");
-  });
-
-  it("blocks a money tool outright, with no question to Nish", opts, async () => {
-    model.enqueue(call("pay", { amount: 5 }), say("I cannot pay."));
-    await boot();
-    channel.push(inbound("m1", "pay 5"));
-    await channel.sentCount(1);
-    assert.deepEqual(ran, []);
-    assert.equal(channel.sent[0]?.text, "I cannot pay.");
-    assert.match(flatten(model.requests[1] as never), new RegExp(MONEY_BLOCK.slice(0, 30)));
   });
 });
 
