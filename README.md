@@ -62,8 +62,8 @@ without the model. Text `RESUME` to continue.
   account is connected (see Calendar and contacts) and its own computer when
   configured (see Its own computer), and `fleet_request` when configured (see
   Fleet requests). Nothing else. Any tool that can act for Nish carries
-  `askFirst`, except `fleet_request`, which only asks Nish's own fleet for
-  work; see Safety rules.
+  `askFirst`; `fleet_request` does not, because it only asks Nish's own fleet
+  for work. See Safety rules.
 - **Context bound.** The thread is one durable conversation. Pi Durable's
   automatic compaction (on by default) summarizes older entries with the same
   model group once the context passes `contextWindow - 16384` tokens
@@ -405,21 +405,19 @@ to delete the Space.
 ## Fleet requests
 
 `fleet_request(text)` in `src/fleet.ts` sends one fix or feature request from
-Nish to the fleet's `issue-desk` agent over Agent Tincan. `issue-desk` files an
-`agent-ready` issue in a product repo and answers with its link. Tether gets no
-GitHub access, shell or token: only one Agent Tincan identity, named `tether`.
+Nish to the fleet's `issue-desk` agent over Agent Tincan. `issue-desk` files
+one issue in a product repo and answers with its link. Tether gets no GitHub
+access, shell or token: only one Agent Tincan identity, named `tether`.
 
 - The model calls it when Nish clearly asks for a change to a product. It does
   not ask first: the request goes to Nish's own fleet, not to another person.
   Only Nish's direct messages reach the model, and STOP halts it like any tool.
 - It makes one call to the stock client with an argument array, never a shell
   string: `tincan ask issue-desk --json -- <text>`, with `TINCAN_CONFIG` set to
-  `TETHER_TINCAN_CONFIG`. The client waits up to its built-in 20 seconds; Tether
-  kills the client at 30 seconds. An answer in time comes back as one line, the
-  issue link. No answer in time gives `Sent to the fleet, request <id>`, and
-  Tether stops there. If Tether's own 30-second kill fires with no answer, the
-  owner hears that the request may still have been sent, so it is never reported
-  as simply lost. A refusal, a client error or an answer it cannot read gives
+  `TETHER_TINCAN_CONFIG`. The client waits up to its built-in 20 seconds, which
+  is the only wait. An answer in time comes back as one line, usually the issue
+  link. No answer in time gives `Sent to the fleet, request <id>`, and Tether
+  stops there. A refusal, a client error or an answer it cannot read gives
   `The fleet request failed: <reason>`.
 
 Setup: the identity file and the `tincan` binary for the service user come from

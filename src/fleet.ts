@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { Type } from "@earendil-works/pi-ai";
-import { type AnyGuardedTool, defineAskFirstTool } from "./approval.ts";
+import { defineTool } from "@earendil-works/pi-durable";
+import { type AnyGuardedTool } from "./approval.ts";
 import type { TincanConfig } from "./config.ts";
 import type { Log } from "./log.ts";
 import { failure, text } from "./tool.ts";
@@ -8,8 +9,6 @@ import { failure, text } from "./tool.ts";
 export const DESK = "issue-desk";
 export const ANSWERED = 0;
 export const PENDING = 2;
-export const TIMEOUT_CODE = -1;
-const RUN_TIMEOUT_MS = 30000;
 const REASON_CHARS = 200;
 export const UNREACHABLE = "The fleet could not be reached.";
 export const sentText = (id: string) => `Sent to the fleet, request ${id}`;
@@ -21,9 +20,8 @@ export type Run = (bin: string, args: readonly string[], env: Readonly<Record<st
 
 const defaultRun: Run = (bin, args, env) =>
   new Promise((resolve, reject) => {
-    execFile(bin, [...args], { env, timeout: RUN_TIMEOUT_MS, encoding: "utf8" }, (error, stdout, stderr) => {
+    execFile(bin, [...args], { env, encoding: "utf8" }, (error, stdout, stderr) => {
       if (error === null) resolve({ code: 0, stdout, stderr });
-      else if (error.killed) resolve({ code: TIMEOUT_CODE, stdout, stderr });
       else if (typeof error.code === "number") resolve({ code: error.code, stdout, stderr });
       else reject(error);
     });
@@ -36,8 +34,11 @@ const reason = (value: string) => {
   return flat.length > REASON_CHARS ? `${flat.slice(0, REASON_CHARS - 1)}…` : flat;
 };
 
-const field = (value: unknown, key: string) => {
-  const found = typeof value === "object" && value !== null ? (value as Record<string, unknown>)[key] : undefined;
+const at = (value: unknown, ...path: readonly string[]) =>
+  path.reduce<unknown>((node, key) => (typeof node === "object" && node !== null ? (node as Record<string, unknown>)[key] : undefined), value);
+
+const lineAt = (value: unknown, ...path: readonly string[]) => {
+  const found = at(value, ...path);
   return typeof found === "string" ? oneLine(found) : "";
 };
 
@@ -46,9 +47,9 @@ export function createFleetTools(config: TincanConfig, log: Log, run: Run = defa
   if (process.env.HOME) env.HOME = process.env.HOME;
   if (process.env.PATH) env.PATH = process.env.PATH;
 
-  const request = defineAskFirstTool({
+  const request = defineTool({
     name: "fleet_request",
-    description: `Send one request for a change to a product (for example "fix the site" or "add a feature") to the fleet's ${DESK}, which files it as a job. Call it only when the owner clearly asks for such a change. Write the request as one plain sentence. Tell the owner the one line it returns: the issue link, the request id, or why it failed.`,
+    description: `Send one request for a change to a product (for example "fix the site" or "add a feature") to the fleet's ${DESK}, which turns it into an issue. Call it only when the owner clearly asks for such a change. Write the request as one plain sentence. Tell the owner the one line it returns: the issue link, the request id, or why it failed.`,
     parameters: Type.Object({ text: Type.String({ minLength: 1, maxLength: 2000 }) }),
     replay: "unsafe",
     execute: async (args) => {
@@ -62,7 +63,7 @@ export function createFleetTools(config: TincanConfig, log: Log, run: Run = defa
         log("fleet_unreachable", { code: typeof code === "string" ? code : "unknown", error: error instanceof Error ? error.name : "unknown" });
         return failure(UNREACHABLE);
       }
-      if (result.code !== ANSWERED && result.code !== PENDING && result.code !== TIMEOUT_CODE)
+      if (result.code !== ANSWERED && result.code !== PENDING)
         return failure(failedText(reason(result.stderr || result.stdout) || `exit ${result.code}`));
       let answer: unknown;
       let unreadable = false;
@@ -72,15 +73,15 @@ export function createFleetTools(config: TincanConfig, log: Log, run: Run = defa
         unreadable = true;
         log("fleet_unreadable", { code: result.code });
       }
-      const id = field(answer, "request_id");
-      const reply = field(answer, "reply");
+      const id = lineAt(answer, "result", "request", "id");
+      const reply = lineAt(answer, "result", "reply", "body");
       log("fleet_request", { code: result.code, id });
       if (result.code === ANSWERED) {
         if (unreadable) return failure(failedText("the answer was not JSON"));
         return reply ? text(reply) : failure(failedText("the fleet answered with nothing"));
       }
       if (id) return text(sentText(id));
-      return failure(failedText(result.code === TIMEOUT_CODE ? "no answer in time, so the request may still have been sent" : "no request id came back"));
+      return failure(failedText("no request id came back"));
     },
   });
 

@@ -7,6 +7,21 @@ const CONFIG: TincanConfig = { bin: "/usr/local/bin/tincan", config: "/etc/tethe
 
 type Call = { bin: string; args: readonly string[]; env: Readonly<Record<string, string>> };
 
+const answered = (body: string, id = "r1"): RunResult => ({
+  code: 0,
+  stdout: JSON.stringify({
+    outcome: "answered",
+    result: { request: { id, to: "issue-desk", status: "answered" }, status: "answered", reply: { from: "issue-desk", status: "answered", body } },
+  }),
+  stderr: "",
+});
+
+const pending = (id: string): RunResult => ({
+  code: 2,
+  stdout: JSON.stringify({ outcome: "pending", result: { request: { id, to: "issue-desk", status: "pending" }, status: "pending" } }),
+  stderr: "",
+});
+
 function build(result: RunResult | Error) {
   const calls: Call[] = [];
   const logs: string[] = [];
@@ -39,7 +54,7 @@ describe("fleet config", () => {
 
 describe("fleet_request", () => {
   it("is one tool that does not ask first, because the request goes to Nish's own fleet", () => {
-    const { tools } = build({ code: 0, stdout: "{}", stderr: "" });
+    const { tools } = build(answered("x"));
     assert.deepEqual(
       tools.map((tool) => [tool.name, tool.askFirst, tool.money]),
       [["fleet_request", undefined, undefined]],
@@ -48,7 +63,7 @@ describe("fleet_request", () => {
 
   it("makes one tincan ask to issue-desk with an argument array and texts back the issue link", async () => {
     const link = "https://github.com/Nishfleet/0509/issues/123";
-    const { calls, send } = build({ code: 0, stdout: JSON.stringify({ request_id: "r1", reply: link }), stderr: "" });
+    const { calls, send } = build(answered(link));
     const result = await send("fix the  booking page;\n rm -rf / $(whoami)");
     assert.equal(textOf(result), link);
     assert.equal(result.isError, undefined);
@@ -57,8 +72,8 @@ describe("fleet_request", () => {
     ]);
   });
 
-  it("texts the request id when no answer comes back in time, after exactly one tincan call", async () => {
-    const { calls, send } = build({ code: 2, stdout: JSON.stringify({ request_id: "r2" }), stderr: "" });
+  it("texts the request id from the client's JSON when no answer comes back in time, after exactly one tincan call", async () => {
+    const { calls, send } = build(pending("r2"));
     const result = await send("add dark mode");
     assert.equal(textOf(result), "Sent to the fleet, request r2");
     assert.equal(textOf(result), sentText("r2"));
@@ -68,7 +83,7 @@ describe("fleet_request", () => {
   it("fails with a reason, never a crash, on output it cannot use", async () => {
     const cases: [RunResult, string][] = [
       [{ code: 0, stdout: "warning: upgrade available\n", stderr: "" }, "the answer was not JSON"],
-      [{ code: 0, stdout: JSON.stringify({ request_id: "r3" }), stderr: "" }, "the fleet answered with nothing"],
+      [{ code: 0, stdout: JSON.stringify({ outcome: "answered", result: { request: { id: "r3" }, status: "answered" } }), stderr: "" }, "the fleet answered with nothing"],
       [{ code: 2, stdout: "{}", stderr: "" }, "no request id came back"],
     ];
     for (const [result, reason] of cases) {
@@ -79,26 +94,11 @@ describe("fleet_request", () => {
   });
 
   it("refuses an empty request before any tincan call", async () => {
-    const { calls, send } = build({ code: 0, stdout: "{}", stderr: "" });
+    const { calls, send } = build(answered("x"));
     const result = await send("   \n\t");
     assert.equal(result.isError, true);
     assert.equal(textOf(result), failedText("the request was empty"));
     assert.deepEqual(calls, []);
-  });
-
-  it("texts the request id when Tether's own timeout kills a client that already filed the request", async () => {
-    const { calls, send } = build({ code: -1, stdout: JSON.stringify({ request_id: "r4" }), stderr: "" });
-    const result = await send("fix it");
-    assert.equal(result.isError, undefined);
-    assert.equal(textOf(result), sentText("r4"));
-    assert.equal(calls.length, 1);
-  });
-
-  it("says the request may still have been sent when the timeout kills a silent client", async () => {
-    const { send } = build({ code: -1, stdout: "", stderr: "" });
-    const result = await send("fix it");
-    assert.equal(result.isError, true);
-    assert.equal(textOf(result), failedText("no answer in time, so the request may still have been sent"));
   });
 
   it("caps a subprocess failure reason at 200 characters", async () => {
