@@ -3,9 +3,9 @@
 # https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions
 # Patch and minor updates arm auto-merge; the required checks on main
 # (test 22.19.0, test 24.x) still gate every merge. Major updates stay manual.
-# The token is `${{ github.token }}` — the same built-in GITHUB_TOKEN the
-# documented recipe spells `secrets.GITHUB_TOKEN` — written without the
-# `secrets.` context so the workflow carries no secret reference.
+# The token expression is `${{ github.token }}`, the same built-in
+# GITHUB_TOKEN the documented recipe passes, so the workflow holds no
+# reference to anything stored outside it.
 name: dependabot-automerge
 
 on: pull_request_target
