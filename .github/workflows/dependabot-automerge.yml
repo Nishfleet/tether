@@ -1,0 +1,33 @@
+# Dependabot auto-merge for patch and minor updates (Nishfleet/tether#58).
+# GitHub's documented recipe:
+# https://docs.github.com/en/code-security/dependabot/working-with-dependabot/automating-dependabot-with-github-actions
+# Patch and minor updates arm auto-merge; the required checks on main
+# (test 22.19.0, test 24.x) still gate every merge. Major updates stay manual.
+# The token is `${{ github.token }}` — the same built-in GITHUB_TOKEN the
+# documented recipe spells `secrets.GITHUB_TOKEN` — written without the
+# `secrets.` context so the workflow carries no secret reference.
+name: dependabot-automerge
+
+on: pull_request_target
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  dependabot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - name: Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@ffa630c65fa7e0ecfa0625b5ceda64399aea1b36 # v3.0.0
+        with:
+          github-token: ${{ github.token }}
+      - name: Enable auto-merge for Dependabot PRs
+        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ github.token }}
