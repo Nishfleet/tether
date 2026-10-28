@@ -299,7 +299,7 @@ describe("web search and reading", () => {
     assert.equal(new URL(seen[0]?.url ?? "").host, new URL(SEARCH_URL).host);
     assert.equal(seen[0]?.init.headers["x-api-key"], "exa-key");
     assert.equal(seen[0]?.init.redirect, "error");
-    assert.equal(seen[1]?.init.redirect, "follow");
+    assert.equal(seen[1]?.init.redirect, "manual");
   });
 
   it("reports a failed search to the model and logs why", opts, async () => {
@@ -309,7 +309,8 @@ describe("web search and reading", () => {
     rig.channel.push(inbound("m1", "look it up"));
     await rig.channel.sentCount(1);
     assert.match(flatten(rig.model.requests[1] as never), /web search failed/i);
-    assert.ok(rig.logs.some((entry) => entry.event === "web_search_failed" && entry.fields.error === "Error"));
+    assert.ok(rig.logs.some((entry) => entry.event === "web_search_failed" && entry.fields.error === "search status 500"));
+    assert.ok(!JSON.stringify(rig.logs).includes("exa-key"), "the key is not in the log");
     assert.equal(seen.length, 1);
   });
 

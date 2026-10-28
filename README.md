@@ -159,7 +159,11 @@ request times out after 15 seconds.
 text or from a `web_search` result since his latest text; any other link asks
 YES/NO first with the full URL shown, so a link in an email or page cannot carry
 his data out. It returns the article text through `@mozilla/readability`, at most
-20000 characters, and only an http or https link to a public host is accepted.
+20000 characters, and only an http or https link to a public host is accepted:
+an IP address, `localhost` or a `.local` name (with or without a trailing dot)
+is refused before any request, and a redirect is followed only to a link that
+passes the same check, at most 5 hops. The check reads the name, not the address
+it resolves to, so the host firewall stays the last line.
 Both tools only read, and both mark what they return as untrusted data.
 
 ## Email and fleet
