@@ -1,0 +1,44 @@
+name: diag-rollup
+on:
+  push:
+    branches: ['diag/**']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      checks: read
+      statuses: read
+      actions: read
+    steps:
+      - name: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          for pr in 43 44; do
+            sha=$(gh pr view "$pr" -R "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)
+            echo "############ PR $pr sha=$sha"
+            echo "--- rollup (gh pr view) ---"
+            gh pr view "$pr" -R "$GITHUB_REPOSITORY" --json headRefName,statusCheckRollup,mergeStateStatus >/tmp/r.json 2>/tmp/r.err
+            echo "exit=$?"; head -c 300 /tmp/r.err
+            jq -c '.statusCheckRollup[]?|{name,status,conclusion,state,startedAt,completedAt}' /tmp/r.json 2>/dev/null | head -40
+            echo "--- rest check-runs (name, app, suite, workflow) ---"
+            gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?per_page=100" \
+              --jq '.check_runs[]|[.name,(.app.slug//"none"),.check_suite.id,(.check_suite.app.id//"none"),(.check_suite.repository.id//"none")]|@tsv' 2>/tmp/c.err | head -40
+            head -c 300 /tmp/c.err
+            echo "--- rest check-suites ---"
+            gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$sha/check-suites?per_page=100" \
+              --jq '.check_suites[]|[.id,(.app.slug//"none"),(.app.id//"none"),.status,.conclusion]|@tsv' 2>/tmp/s.err | head -40
+            head -c 300 /tmp/s.err
+            echo "--- rest statuses ---"
+            gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$sha/statuses?per_page=100" \
+              --jq '.[]|[.context,.state,(.creator.login//"none")]|@tsv' 2>/tmp/st.err | head -40
+            head -c 300 /tmp/st.err
+          done
+          echo "--- done ---"
