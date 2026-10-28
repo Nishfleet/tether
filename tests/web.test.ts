@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { Links, NOTE, MAX_HTML_BYTES, MAX_PAGE_CHARS, SEARCH_RESULTS, SEARCH_URL, SNIPPET_CHARS, clean, formatResults, pageTarget, readPage, reason, searchWeb, webTools } from "../src/web.ts";
+import { Links, NOTE, MAX_HTML_BYTES, MAX_REDIRECTS, MAX_PAGE_CHARS, SEARCH_RESULTS, SEARCH_URL, SNIPPET_CHARS, clean, formatResults, pageTarget, readPage, reason, searchWeb, webTools } from "../src/web.ts";
 
 type Seen = { url: string; init: { headers: Record<string, string>; redirect: string; method?: string; body?: string } };
 
@@ -12,6 +12,12 @@ const exa = (body: unknown, seen: Seen[] = [], status = 200) => async (url: stri
 const page = (body: string, seen: Seen[] = [], type = "text/html; charset=utf-8", status = 200) => async (url: string, init: Seen["init"]) => {
   seen.push({ url, init });
   return new Response(body, { status, headers: { "content-type": type } });
+};
+
+const hops = (locations: string[], seen: Seen[] = []) => async (url: string, init: Seen["init"]) => {
+  seen.push({ url, init });
+  const location = locations[seen.length - 1];
+  return location === undefined ? new Response("plain", { headers: { "content-type": "text/plain" } }) : new Response(null, { status: 302, headers: { location } });
 };
 
 const ARTICLE = [
@@ -99,9 +105,12 @@ describe("page target", () => {
       "http://[::ffff:127.0.0.1]/",
       "http://[fd00::1]:4000/health/readiness",
       "http://printer.local/",
+      "http://localhost./",
+      "http://printer.local./",
     ]) {
       assert.equal(pageTarget(bad), undefined, bad);
     }
+    assert.ok(pageTarget("https://tea.test./"), "a trailing dot on a public host stays allowed, so the refusals above are not vacuous");
   });
 });
 
@@ -110,13 +119,39 @@ describe("web read", () => {
     const seen: Seen[] = [];
     const read = await readPage(page(ARTICLE, seen), "tether-test", new URL("https://tea.test/notes"));
     assert.equal(seen[0]?.url, "https://tea.test/notes");
-    assert.equal(seen[0]?.init.redirect, "follow");
+    assert.equal(seen[0]?.init.redirect, "manual");
     assert.equal(seen[0]?.init.headers["user-agent"], "tether-test");
     assert.equal(read.url, "https://tea.test/notes");
     assert.equal(read.title, "Tea Notes");
     assert.match(read.text, /Kombucha is a fermented tea/);
     assert.doesNotMatch(read.text, /Home About Subscribe|All rights reserved|alert/);
     assert.ok(read.text.length < 2000);
+  });
+
+  it("follows a redirect only to another public link, and only a few times", async () => {
+    const seen: Seen[] = [];
+    const read = await readPage(hops(["https://tea.test/b", "/c"], seen), "ua", new URL("http://tea.test/a"));
+    assert.deepEqual(seen.map((hop) => hop.url), ["http://tea.test/a", "https://tea.test/b", "https://tea.test/c"]);
+    assert.equal(read.url, "https://tea.test/c");
+    for (const location of ["http://127.0.0.1:4000/metrics", "http://localhost./", "file:///etc/passwd", "http://"]) {
+      const refused: Seen[] = [];
+      await assert.rejects(readPage(hops([location], refused), "ua", new URL("https://tea.test/a")), /redirect refused/, location);
+      assert.equal(refused.length, 1, location);
+    }
+    const loop = Array.from({ length: MAX_REDIRECTS + 1 }, (_, index) => `https://tea.test/${index}`);
+    await assert.rejects(readPage(hops(loop), "ua", new URL("https://tea.test/a")), /redirect refused/);
+    const capped = Array.from({ length: MAX_REDIRECTS }, (_, index) => `https://tea.test/${index}`);
+    const last = await readPage(hops(capped), "ua", new URL("https://tea.test/a"));
+    assert.equal(last.url, `https://tea.test/${MAX_REDIRECTS - 1}`);
+  });
+
+  it("readPage refuses a non-public link even when the caller skipped the check", async () => {
+    await assert.rejects(
+      readPage(async () => {
+        throw new Error("must not fetch");
+      }, "ua", new URL("http://127.0.0.1:4000/metrics")),
+      /not a public web link/,
+    );
   });
 
   it("keeps a plain text page as it is", async () => {
@@ -143,8 +178,8 @@ describe("web read", () => {
 describe("web tools", () => {
   it("names the reason a call failed, so a dead host is not just a type name", () => {
     assert.equal(reason(Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } })), "ENOTFOUND");
-    assert.equal(reason(new TypeError("fetch failed")), "TypeError");
-    assert.equal(reason(new Error("search status 500")), "Error");
+    assert.equal(reason(new TypeError("fetch failed")), "fetch failed");
+    assert.equal(reason(new Error("search status 500")), "search status 500");
     assert.equal(reason("nope"), "unknown");
   });
 
