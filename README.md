@@ -48,19 +48,18 @@ asks first only before it messages someone else. No tool moves money.
 | `computer_run`, `computer_write`, `computer_read` | its own computer | no |
 
 **Ask first.** A tool that messages someone other than the owner carries
-`askFirst` (`src/approval.ts`). Before it runs, Tether texts what it is about to
-do and waits. `YES` runs it, `NO` cancels it, and no answer in 24 hours cancels
-it. Today `calendar_invite`, `email_send` and `web_read` ask.
+`askFirst` (`src/approval.ts`): Tether texts what it will do and waits. `YES` runs
+it, `NO` cancels it, and 24 hours of silence cancels it. `calendar_invite`,
+`email_send` and `web_read` ask.
 
-The `computer_*` tools drive Tether's own Cua Linux Space (`src/computer.ts`):
-no access to Nish's computers, files that stay between conversations, a command
-timeout of 1 to 900 seconds, and a read capped at 100000 bytes.
+The `computer_*` tools drive Tether's own Cua Linux Space (`src/computer.ts`): no
+access to Nish's computers, files that stay between conversations, a command timeout
+of 1 to 900 seconds, and a read capped at 100000 bytes.
 
 ## Model
 
-Tether talks to an OpenAI-compatible router (`TETHER_LLM_BASE_URL`, default
-`http://127.0.0.1:4000`). Every request goes to one model group,
-`TETHER_MODEL_GROUP` (default `tether`), and the router owns fallbacks.
+Tether sends every request to one router model group, `TETHER_MODEL_GROUP`
+(default `tether`), and the router owns fallbacks.
 
 ## Off switch
 
@@ -111,17 +110,19 @@ APIs on, and the consent screen In production. Open this link with your client i
 approve all five permissions, and copy the `code` from the failed page:
 
 ```
-https://accounts.google.com/o/oauth2/v2/auth?response_type=code&access_type=offline&prompt=consent&redirect_uri=http://127.0.0.1:8765&client_id=<CLIENT_ID>&scope=https://www.googleapis.com/auth/calendar.events%20https://www.googleapis.com/auth/calendar.calendarlist.readonly%20https://www.googleapis.com/auth/contacts%20https://www.googleapis.com/auth/gmail.readonly%20https://www.googleapis.com/auth/gmail.compose
+https://accounts.google.com/o/oauth2/v2/auth?response_type=code&access_type=offline&prompt=consent&redirect_uri=http://127.0.0.1:8765&client_id=<CLIENT_ID>&code_challenge=<CHALLENGE>&code_challenge_method=S256&scope=https://www.googleapis.com/auth/calendar.events%20https://www.googleapis.com/auth/calendar.calendarlist.readonly%20https://www.googleapis.com/auth/contacts%20https://www.googleapis.com/auth/gmail.readonly%20https://www.googleapis.com/auth/gmail.compose
 ```
 
 Trade it for a refresh token. The secrets go through `printf`, never `ps`:
 
 ```sh
+VERIFIER=$(openssl rand -hex 32)
+CHALLENGE=$(printf %s "$VERIFIER" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d =)
 printf 'Client id: '; read -r CLIENT_ID
 printf 'Client secret: '; read -rs CLIENT_SECRET; echo
 printf 'Code: '; read -r CODE
-printf 'client_id=%s&client_secret=%s&code=%s&redirect_uri=http://127.0.0.1:8765&grant_type=authorization_code' \
-  "$CLIENT_ID" "$CLIENT_SECRET" "$CODE" | curl -s https://oauth2.googleapis.com/token -d @-
+printf 'client_id=%s&client_secret=%s&code=%s&code_verifier=%s&redirect_uri=http://127.0.0.1:8765&grant_type=authorization_code' \
+  "$CLIENT_ID" "$CLIENT_SECRET" "$CODE" "$VERIFIER" | curl -s https://oauth2.googleapis.com/token -d @-
 ```
 
 Set the three `TETHER_GOOGLE_*` variables, the last from `refresh_token`.
