@@ -3,7 +3,6 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineDoc, defineTask, defineTool, type ConversationId, type Task, type TaskRuntime, type Tx } from "@earendil-works/pi-durable";
 import { type CalendarOptions, dedupe } from "./calendar/tools.ts";
 import { addDays, isoDay, parseWhen } from "./calendar/time.ts";
-import { CLEAR_TITLE, clean } from "./calendar/untrusted.ts";
 import type { Locations } from "./channel.ts";
 import { StateDoc } from "./docs.ts";
 import type { Log } from "./log.ts";
@@ -60,6 +59,8 @@ export function nextBriefAt(after: number, time: string, zone: string): number {
 
 const clock = (ms: number, zone: string) => new Intl.DateTimeFormat("en-GB", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms));
 
+const flat = (value: string, limit: number) => value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, limit);
+
 async function calendarLine(options: BriefOptions, from: Date, to: Date): Promise<string | undefined> {
   const backends = options.calendar?.backends.calendar ?? [];
   if (backends.length === 0) return undefined;
@@ -71,7 +72,7 @@ async function calendarLine(options: BriefOptions, from: Date, to: Date): Promis
   });
   if (settled.every((outcome) => outcome.status === "rejected")) return undefined;
   if (events.length === 0) return "Calendar: nothing today.";
-  const items = dedupe(events).map((event) => `${event.allDay ? "all day" : clock(event.start.getTime(), options.timeZone)} ${clean(event.title, CLEAR_TITLE)}`);
+  const items = dedupe(events).map((event) => `${event.allDay ? "all day" : clock(event.start.getTime(), options.timeZone)} ${flat(event.title, 120)}`);
   return `Calendar: ${items.join("; ")}.`;
 }
 
