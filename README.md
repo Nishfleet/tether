@@ -61,6 +61,27 @@ of 1 to 900 seconds, and a read capped at 100000 bytes.
 Tether sends every request to one router model group, `TETHER_MODEL_GROUP`
 (default `tether`), and the router owns fallbacks.
 
+### Daily caps spent
+
+The daily caps are set on the router, not in the app: 50 USD/day on Claude
+Sonnet 5.5, 5 USD/day on DeepSeek V4.1 Flash, and 55 USD/day on Tether's router
+key. When the total is spent the router refuses every call with a LiteLLM
+budget error (HTTP 400, type `budget_exceeded`, message `Budget has been
+exceeded!`).
+
+- Tether tells that error apart from every other model error by matching
+  `budget_exceeded` or `Budget has been exceeded` in the error text that Pi
+  durable stores as the `detail` of an `unanswered` settlement. Any other
+  error keeps the fixed apology.
+- On the first such error of a day it sends the owner one text, `Both model
+  budgets are spent, back after 00:00 UTC.`, instead of the apology. A second
+  budget error that day sends nothing (the `budget_exceeded` log line says
+  `texted: false`).
+- Nothing needs clearing at midnight: the router starts answering again and the
+  next text is answered normally. The UTC day of the last text is a durable
+  document in the SQLite file, so a restart on the same day stays quiet and the
+  caps running out again on a later day sends one new text.
+
 ## Off switch
 
 On the VPS, as root:

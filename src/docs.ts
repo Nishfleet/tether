@@ -5,6 +5,10 @@ export type State = {
   seen: string[];
 };
 
+export type Caps = {
+  textedOn: string | null;
+};
+
 export type Note = {
   id: string;
   text: string;
@@ -33,5 +37,13 @@ export const MemoryDoc = defineDoc<Memory>({
   version: 1,
   scope: "session",
   initial: () => ({ notes: [], next: 1 }),
+  checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
+});
+
+export const CapsDoc = defineDoc<Caps>({
+  kind: "tether.caps",
+  version: 1,
+  scope: "session",
+  initial: () => ({ textedOn: null }),
   checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 20,
 });

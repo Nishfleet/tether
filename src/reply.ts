@@ -2,7 +2,7 @@ import { withAbortSignal } from "@earendil-works/chord/context";
 import { defineTask, type EntryId, type Task, type TaskRuntime } from "@earendil-works/pi-durable";
 import type { Context } from "@earendil-works/chord";
 import type { Channel } from "./channel.ts";
-import { StateDoc } from "./docs.ts";
+import { CapsDoc, StateDoc } from "./docs.ts";
 import type { Log } from "./log.ts";
 
 export type ReplyInput = {
@@ -21,6 +21,8 @@ export const FAILURE_TEXT = "Sorry, I could not get an answer just now. Please t
 export const SEND_ATTEMPTS = 8;
 export const MAX_PART_CHARS = 3500;
 export const TRUNCATED_MARKER = "(truncated: this reply hit my length limit)";
+export const CAPS_SPENT_TEXT = "Both model budgets are spent, back after 00:00 UTC.";
+const BUDGET_ERROR = /budget_exceeded|budget has been exceeded/i;
 
 export function splitReply(text: string, limit: number = MAX_PART_CHARS): string[] {
   const parts: string[] = [];
@@ -82,6 +84,23 @@ export function createReplyTask(options: { channel: Channel; log: Log; retryBase
         const answer = settled.status === "done" ? settled.answer : undefined;
         const read = answer === undefined ? undefined : await readAnswer(runtime, answer, aborting);
         if (settled.status !== "done") log("model_unanswered", { reason: settled.reason });
+        const { space } = task.input;
+        if (settled.status === "unanswered" && typeof settled.detail === "string" && BUDGET_ERROR.test(settled.detail)) {
+          const day = new Date(runtime.now()).toISOString().slice(0, 10);
+          let texted = false;
+          await runtime.commit(async (tx) => {
+            const caps = await tx.doc(CapsDoc);
+            texted = caps.textedOn !== day;
+            if (texted) {
+              caps.textedOn = day;
+              const input: ReplyInput = { space, inbound: null, prompt: null, notice: CAPS_SPENT_TEXT, run: 0 };
+              await tx.createTask(self, input, { ownership: { kind: "conversation" }, conversationId: runtime.conversationId });
+            }
+            return { status: "terminal", outcome: { status: "completed", result: null } };
+          }, context);
+          log("budget_exceeded", { inbound: task.input.inbound ?? "notice", texted });
+          return;
+        }
         await runtime.commit(() => ({ status: "running", checkpoint: { phase: "send", text: read ?? FAILURE_TEXT, attempt: 0 } }), context);
       },
       send: async (task, runtime, context) => {

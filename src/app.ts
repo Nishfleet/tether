@@ -54,6 +54,7 @@ export type TetherOptions = {
   readonly allowedSender: string;
   readonly log: Log;
   readonly retryBaseMs?: number;
+  readonly now?: () => number;
   readonly timeZone?: string;
   readonly fetch?: Fetch;
   readonly searchApiKey?: string;
@@ -111,6 +112,7 @@ export async function startTether(options: TetherOptions): Promise<Tether> {
       registry,
       identity: { attribution: null },
       settings: { afterFailedRun: "continue", ...options.settings },
+      ...(options.now ? { now: options.now } : {}),
       onReport: (error, info) => log("harness_report", { type: info.type, error: error instanceof Error ? error.name : "unknown" }),
     },
     context,
