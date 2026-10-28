@@ -14,6 +14,12 @@ const page = (body: string, seen: Seen[] = [], type = "text/html; charset=utf-8"
   return new Response(body, { status, headers: { "content-type": type } });
 };
 
+const hops = (locations: string[], seen: Seen[] = []) => async (url: string, init: Seen["init"]) => {
+  seen.push({ url, init });
+  const location = locations[seen.length - 1];
+  return location === undefined ? new Response("plain", { headers: { "content-type": "text/plain" } }) : new Response(null, { status: 302, headers: { location } });
+};
+
 const ARTICLE = [
   "<!doctype html><html><head><title>Tea Notes</title></head><body>",
   "<nav>Home About Subscribe</nav>",
@@ -104,6 +110,7 @@ describe("page target", () => {
     ]) {
       assert.equal(pageTarget(bad), undefined, bad);
     }
+    assert.ok(pageTarget("https://tea.test./"), "a trailing dot on a public host stays allowed, so the refusals above are not vacuous");
   });
 });
 
@@ -122,22 +129,29 @@ describe("web read", () => {
   });
 
   it("follows a redirect only to another public link, and only a few times", async () => {
-    const hops = (locations: string[], seen: Seen[] = []) => async (url: string, init: Seen["init"]) => {
-      seen.push({ url, init });
-      const location = locations[seen.length - 1];
-      return location === undefined ? new Response("plain", { headers: { "content-type": "text/plain" } }) : new Response(null, { status: 302, headers: { location } });
-    };
     const seen: Seen[] = [];
     const read = await readPage(hops(["https://tea.test/b", "/c"], seen), "ua", new URL("http://tea.test/a"));
     assert.deepEqual(seen.map((hop) => hop.url), ["http://tea.test/a", "https://tea.test/b", "https://tea.test/c"]);
     assert.equal(read.url, "https://tea.test/c");
-    for (const location of ["http://127.0.0.1:4000/metrics", "http://localhost./", "file:///etc/passwd"]) {
+    for (const location of ["http://127.0.0.1:4000/metrics", "http://localhost./", "file:///etc/passwd", "http://"]) {
       const refused: Seen[] = [];
       await assert.rejects(readPage(hops([location], refused), "ua", new URL("https://tea.test/a")), /redirect refused/, location);
       assert.equal(refused.length, 1, location);
     }
     const loop = Array.from({ length: MAX_REDIRECTS + 1 }, (_, index) => `https://tea.test/${index}`);
     await assert.rejects(readPage(hops(loop), "ua", new URL("https://tea.test/a")), /redirect refused/);
+    const capped = Array.from({ length: MAX_REDIRECTS }, (_, index) => `https://tea.test/${index}`);
+    const last = await readPage(hops(capped), "ua", new URL("https://tea.test/a"));
+    assert.equal(last.url, `https://tea.test/${MAX_REDIRECTS - 1}`);
+  });
+
+  it("readPage refuses a non-public link even when the caller skipped the check", async () => {
+    await assert.rejects(
+      readPage(async () => {
+        throw new Error("must not fetch");
+      }, "ua", new URL("http://127.0.0.1:4000/metrics")),
+      /not a public web link/,
+    );
   });
 
   it("keeps a plain text page as it is", async () => {

@@ -24,7 +24,6 @@ import { rememberSpace } from "./owner.ts";
 import type { Fetch } from "./places.ts";
 import { createReplyTask, type ReplyInput } from "./reply.ts";
 import { Links } from "./web.ts";
-
 export const INSTRUCTIONS = [
   "You are Tether, a personal assistant that chats with one person over iMessage.",
   "Reply in short plain text without markdown.",

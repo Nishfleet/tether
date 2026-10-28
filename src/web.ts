@@ -175,13 +175,23 @@ export function clean(text: string): string {
 }
 
 export async function readPage(fetcher: Fetch, userAgent: string, url: URL): Promise<Page> {
+  const first = pageTarget(url.toString());
+  if (!first) throw new Error("not a public web link");
   const init = { headers: { "user-agent": userAgent, accept: "text/html,application/xhtml+xml,text/plain;q=0.9" }, signal: AbortSignal.timeout(READ_TIMEOUT_MS), redirect: "manual" as const };
-  let target = url;
+  let target = first;
   let response = await fetcher(target.toString(), init);
   for (let hop = 0; response.status >= 300 && response.status < 400; hop++) {
     const location = response.headers.get("location");
-    const next = location === null ? undefined : pageTarget(new URL(location, target).toString());
+    let next: URL | undefined;
+    if (location !== null) {
+      try {
+        next = pageTarget(new URL(location, target).toString());
+      } catch {
+        next = undefined;
+      }
+    }
     if (hop === MAX_REDIRECTS || !next) throw new Error(`redirect refused at ${target.host}`);
+    await response.body?.cancel();
     target = next;
     response = await fetcher(target.toString(), init);
   }
