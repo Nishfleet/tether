@@ -9,6 +9,11 @@ export type ComputerConfig = {
   readonly home: string;
 };
 
+export type TincanConfig = {
+  readonly bin: string;
+  readonly config: string;
+};
+
 export type Config = {
   readonly allowedSender: string;
   readonly llmBaseUrl: string;
@@ -17,6 +22,8 @@ export type Config = {
   readonly stateDir: string;
   readonly timeZone: string;
   readonly computer: ComputerConfig | undefined;
+  readonly searchApiKey: string | undefined;
+  readonly tincan: TincanConfig | undefined;
 };
 
 export type PhotonConfig = {
@@ -40,6 +47,13 @@ export function loadComputerConfig(env: Env, stateDir: string): ComputerConfig |
   const token = env.TETHER_SPACE_TOKEN?.trim() ?? "";
   if (!url || !token) return undefined;
   return { url: spaceUrl(url), token, home: join(stateDir, "cua") };
+}
+
+export function loadTincanConfig(env: Env): TincanConfig | undefined {
+  const bin = env.TETHER_TINCAN_BIN?.trim() ?? "";
+  const config = env.TETHER_TINCAN_CONFIG?.trim() ?? "";
+  if (!bin || !config) return undefined;
+  return { bin, config };
 }
 
 function required(env: Env, names: readonly string[]): Record<string, string> {
@@ -68,6 +82,8 @@ export function loadConfig(env: Env): Config {
     stateDir,
     timeZone,
     computer: loadComputerConfig(env, stateDir),
+    searchApiKey: env.TETHER_SEARCH_API_KEY?.trim() || undefined,
+    tincan: loadTincanConfig(env),
   };
 }
 

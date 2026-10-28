@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { Channel, Inbound } from "../src/channel.ts";
+import type { Channel, Inbound, Locations } from "../src/channel.ts";
 
 export const KEY = "test-router-key";
 export const ALLOWED = "owner@example.test";
@@ -167,6 +167,7 @@ export function inbound(id: string, text: string | undefined, overrides: Partial
 }
 
 export class FakeChannel implements Channel {
+  locations: Locations | undefined;
   readonly sent: { space: string; text: string }[] = [];
   failures = 0;
   private readonly pending: Inbound[] = [];

