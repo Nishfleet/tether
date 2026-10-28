@@ -1,0 +1,48 @@
+name: diag-perms
+on:
+  push:
+    branches: ['diag/**']
+permissions:
+  contents: read
+jobs:
+  with-contents:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      actions: read
+      checks: read
+      statuses: read
+    steps:
+      - name: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          for i in 1 2 3 4 5; do
+            gh pr view 44 -R "$GITHUB_REPOSITORY" --json headRefName,statusCheckRollup,mergeStateStatus >/dev/null 2>/tmp/e
+            echo "with-contents try=$i exit=$? err=$(head -c 120 /tmp/e)"
+            sleep 2
+          done
+  without-contents:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      issues: write
+      pull-requests: read
+      actions: read
+      checks: read
+      statuses: read
+    steps:
+      - name: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          for i in 1 2 3 4 5; do
+            gh pr view 44 -R "$GITHUB_REPOSITORY" --json headRefName,statusCheckRollup,mergeStateStatus >/dev/null 2>/tmp/e
+            echo "without-contents try=$i exit=$? err=$(head -c 120 /tmp/e)"
+            sleep 2
+          done
