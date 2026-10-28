@@ -1,11 +1,7 @@
-import { createHash } from "node:crypto";
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
 import { MemoryDoc, NOTE_CHARS, NOTE_LIMIT } from "./docs.ts";
-
-const digest = (note: string) => createHash("sha256").update(note).digest("hex");
-
-const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
+import { failure, text } from "./tool.ts";
 
 const save = defineTool({
   name: "memory_save",
@@ -13,19 +9,23 @@ const save = defineTool({
   parameters: Type.Object({ note: Type.String({ minLength: 1, maxLength: NOTE_CHARS }) }),
   replay: "safe",
   execute: async (args, api, context) => {
-    const full = digest(args.note);
     const outcome = await api.commit(async (tx) => {
       const memory = await tx.doc(MemoryDoc);
-      const short = `n${full.slice(0, 8)}`;
-      const clash = memory.notes.find((note) => note.id === short);
-      if (clash?.text === args.note) return short;
-      const id = clash ? `n${full}` : short;
-      if (memory.notes.some((note) => note.id === id)) return id;
-      if (memory.notes.length >= NOTE_LIMIT) return undefined;
-      memory.notes.push({ id, text: args.note, at: api.now() });
+      const { notes } = memory;
+      const same = notes.find((note) => note.text === args.note);
+      if (same) return same.id;
+      if (notes.length >= NOTE_LIMIT) return undefined;
+      const highest = notes.reduce((max, note) => {
+        const value = Number(note.id.slice(1));
+        return Number.isFinite(value) && value > max ? Math.trunc(value) : max;
+      }, 0);
+      const next = memory.next ?? highest + 1;
+      const id = `n${next}`;
+      memory.next = next + 1;
+      notes.push({ id, text: args.note, at: api.now() });
       return id;
     }, context);
-    return outcome !== undefined ? text(`Saved as ${outcome}.`) : { ...text(`Memory is full (${NOTE_LIMIT} notes). Forget one first.`), isError: true };
+    return outcome !== undefined ? text(`Saved as ${outcome}.`) : failure(`Memory is full (${NOTE_LIMIT} notes). Forget one first.`);
   },
 });
 
@@ -42,7 +42,7 @@ const forget = defineTool({
       memory.notes.splice(index, 1);
       return true;
     }, context);
-    return removed ? text(`Forgot ${args.id}.`) : { ...text(`No note ${args.id}.`), isError: true };
+    return removed ? text(`Forgot ${args.id}.`) : failure(`No note ${args.id}.`);
   },
 });
 

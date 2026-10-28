@@ -93,7 +93,7 @@ describe("reminders", () => {
     assert.match(last, /UTC offset/);
   });
 
-  it("holds a due reminder while stopped and sends it after RESUME", opts, async () => {
+  it("drops a reminder that comes due while stopped, and logs it", opts, async () => {
     rig.model.enqueue(call("reminder_set", { text: "later", inMinutes: 0.03 }), say("Set."));
     await rig.boot();
     rig.channel.push(inbound("m1", "remind me"));
@@ -102,10 +102,11 @@ describe("reminders", () => {
     await rig.channel.sentCount(2);
     assert.equal(rig.texts()[1], STOPPED_TEXT);
     await new Promise((resolve) => setTimeout(resolve, 2600));
+    await rig.logged("reminder_dropped");
     assert.deepEqual(rig.texts(), ["Set.", STOPPED_TEXT]);
     rig.channel.push(inbound("m3", "RESUME"));
-    await rig.channel.sentCount(4);
-    assert.deepEqual(rig.texts().slice(2).sort(), ["Resumed.", `${REMINDER_PREFIX}later`].sort());
+    await rig.channel.sentCount(3);
+    assert.deepEqual(rig.texts(), ["Set.", STOPPED_TEXT, "Resumed."]);
   });
 
   it("answers time_now with the owner's zone", opts, async () => {

@@ -1,6 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
-import { clean, CLEAR_NAME, CLEAR_TITLE, CLEAR_VALUE, wrap } from "../calendar/untrusted.ts";
 import { failure, text } from "../tool.ts";
 import type { EmailBackend, EmailMessage, EmailSummary } from "./types.ts";
 
@@ -13,6 +12,9 @@ const EMAIL = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;
 const NEWLINE = /\r|\n/;
 const SUBJECT_CHARS = 200;
 const BODY_CHARS = 20000;
+const HEADER_CHARS = 60;
+const TITLE_CHARS = 120;
+const NAME_CHARS = 80;
 
 const stamp = (date: Date | undefined, timezone: string) =>
   date
@@ -39,10 +41,15 @@ function check(email: { to: string; subject: string; body: string }): string | u
   return undefined;
 }
 
-const summaryLine = (email: EmailSummary, timezone: string) =>
-  `[${email.id}] ${stamp(email.date, timezone)} | from ${clean(email.from, CLEAR_VALUE)} | ${clean(email.subject, CLEAR_TITLE)} | ${clean(email.snippet, 120)}`;
+const oneLine = (value: string, limit: number) => {
+  const flat = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}<>]/gu, " ").replace(/\s+/g, " ").trim();
+  return flat.length > limit ? `${flat.slice(0, limit)}...` : flat;
+};
 
-const messageLine = (label: string, value: string, limit: number) => `${label}: ${clean(value, limit) || "none"}`;
+const summaryLine = (email: EmailSummary, timezone: string) =>
+  `[${email.id}] ${stamp(email.date, timezone)} | from ${oneLine(email.from, HEADER_CHARS)} | ${oneLine(email.subject, TITLE_CHARS)} | ${oneLine(email.snippet, TITLE_CHARS)}`;
+
+const messageLine = (label: string, value: string, limit: number) => `${label}: ${oneLine(value, limit) || "none"}`;
 
 export function createEmailExtension(options: EmailOptions): Extension {
   const { backend, timezone } = options;
@@ -60,7 +67,7 @@ export function createEmailExtension(options: EmailOptions): Extension {
         return fail("Gmail could not be searched", error);
       }
       if (found.length === 0) return text("No matching email.");
-      return text(wrap("email_data", found.map((email) => summaryLine(email, timezone))));
+      return text(found.map((email) => summaryLine(email, timezone)).join("\n"));
     },
   });
 
@@ -76,8 +83,9 @@ export function createEmailExtension(options: EmailOptions): Extension {
       } catch (error) {
         return fail("The email could not be read", error);
       }
-      const head = [messageLine("From", email.from, CLEAR_VALUE), messageLine("To", email.to, CLEAR_VALUE), messageLine("Subject", email.subject, CLEAR_TITLE), `Date: ${stamp(email.date, timezone)}`];
-      return text(wrap("email_data", [...head, clean(email.body, BODY_CHARS)]));
+      const head = [messageLine("From", email.from, HEADER_CHARS), messageLine("To", email.to, HEADER_CHARS), messageLine("Subject", email.subject, TITLE_CHARS), `Date: ${stamp(email.date, timezone)}`];
+      const body = email.body.length > BODY_CHARS ? `${email.body.slice(0, BODY_CHARS)}...` : email.body;
+      return text([...head, body].join("\n"));
     },
   });
 
@@ -98,7 +106,7 @@ export function createEmailExtension(options: EmailOptions): Extension {
       } catch (error) {
         return fail("The draft was not saved", error);
       }
-      return text(`Draft saved in Gmail: to ${clean(args.to, CLEAR_VALUE)} — ${clean(args.subject, CLEAR_TITLE)}`);
+      return text(`Draft saved in Gmail: to ${oneLine(args.to, HEADER_CHARS)} — ${oneLine(args.subject, TITLE_CHARS)}`);
     },
   });
 
@@ -120,12 +128,12 @@ export function createEmailExtension(options: EmailOptions): Extension {
         } catch (error) {
           return fail("The email was not sent", error);
         }
-        return text(`Sent to ${clean(args.to, CLEAR_VALUE)}: ${clean(args.subject, CLEAR_TITLE)}`);
+        return text(`Sent to ${oneLine(args.to, HEADER_CHARS)}: ${oneLine(args.subject, TITLE_CHARS)}`);
       },
     }),
     {
       askFirst: (args: { to: string; subject: string }) =>
-        `Send an email from your Gmail to ${clean(args.to, CLEAR_NAME)} — ${clean(args.subject, CLEAR_TITLE)}.`,
+        `Send an email from your Gmail to ${oneLine(args.to, NAME_CHARS)} — ${oneLine(args.subject, TITLE_CHARS)}.`,
     },
   );
 

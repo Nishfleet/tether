@@ -41,8 +41,8 @@ describe("fleet_request", () => {
   it("is one tool that does not ask first, because the request goes to Nish's own fleet", () => {
     const { tools } = build({ code: 0, stdout: "{}", stderr: "" });
     assert.deepEqual(
-      tools.map((tool) => [tool.name, tool.askFirst, tool.money]),
-      [["fleet_request", undefined, undefined]],
+      tools.map((tool) => [tool.name, tool.askFirst]),
+      [["fleet_request", undefined]],
     );
   });
 

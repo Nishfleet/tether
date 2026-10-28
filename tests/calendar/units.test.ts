@@ -3,7 +3,6 @@ import { describe, it } from "node:test";
 import { loadCalendarConfig } from "../../src/calendar/config.ts";
 import { openCalendar } from "../../src/calendar/index.ts";
 import { describeWhen, parseWhen } from "../../src/calendar/time.ts";
-import { clean } from "../../src/calendar/untrusted.ts";
 
 const GOOGLE = { TETHER_GOOGLE_CLIENT_ID: "a", TETHER_GOOGLE_CLIENT_SECRET: "b", TETHER_GOOGLE_REFRESH_TOKEN: "c" };
 const ICLOUD = { TETHER_ICLOUD_APPLE_ID: "x", TETHER_ICLOUD_APP_PASSWORD: "y" };
@@ -58,12 +57,5 @@ describe("times", () => {
     assert.equal(describeWhen(new Date("2026-10-24T07:30:00Z"), new Date("2026-10-24T08:30:00Z"), false, zone), "Sat, 24 Oct 2026 13:00-14:00");
     assert.equal(describeWhen(new Date("2026-10-24T17:30:00Z"), new Date("2026-10-25T01:30:00Z"), false, zone), "Sat, 24 Oct 2026 23:00 to Sun, 25 Oct 2026 07:00");
     assert.equal(describeWhen(new Date("2026-10-23T18:30:00Z"), new Date("2026-10-25T18:30:00Z"), true, zone), "Sat, 24 Oct 2026 to Sun, 25 Oct 2026, all day");
-  });
-});
-
-describe("untrusted text", () => {
-  it("flattens lines, drops tags and control characters, and shortens", () => {
-    assert.equal(clean("a\n\n<b>b</b>\t\u0000c", 50), "a b b /b c");
-    assert.equal(clean("x".repeat(30), 10), `${"x".repeat(10)}...`);
   });
 });

@@ -12,7 +12,6 @@ import { openEmail } from "./email/index.ts";
 import { createFleetTools } from "./fleet.ts";
 import type { Log } from "./log.ts";
 import { createModelAccess } from "./model.ts";
-import { loadSalt } from "./salt.ts";
 
 export const DATABASE_FILE = "tether.sqlite";
 
@@ -26,7 +25,7 @@ export async function run(
   mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
   chmodSync(config.stateDir, 0o700);
   const storage = await openNodeSqliteStorage(join(config.stateDir, DATABASE_FILE));
-  const { models, ref } = createModelAccess({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey, group: config.modelGroup, log });
+  const { models, ref } = createModelAccess({ baseUrl: config.llmBaseUrl, apiKey: config.llmApiKey, group: config.modelGroup });
   const google = loadCalendarConfig(env, config.timeZone);
   const calendar = openCalendar(google);
   log("calendar", { sources: calendar ? calendar.backends.calendar.map((backend) => backend.source).join(",") : "" });
@@ -41,7 +40,6 @@ export async function run(
     model: ref,
     storage,
     allowedSender: config.allowedSender,
-    salt: loadSalt(config.stateDir),
     log,
     timeZone: config.timeZone,
     searchApiKey: config.searchApiKey,
