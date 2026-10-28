@@ -1,0 +1,169 @@
+name: diag-list
+on:
+  push:
+    branches:
+    - diag/**
+permissions:
+  contents: read
+jobs:
+  repro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      issues: write
+      pull-requests: read
+      actions: read
+      checks: read
+      statuses: read
+    steps:
+    - name: trace
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CLOSED: ${{ github.event.issue.number }}
+        ISSUE: ${{ inputs.issue }}
+        CHECK_DEFS: 'def pending: (.status != null and .status != "COMPLETED") or .state == "PENDING";
+
+          def failed: (.conclusion | IN("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"))
+          or (.state | IN("FAILURE", "ERROR"));
+
+          '
+        RED_REWORK: "(.pr.statusCheckRollup // []) as $checks\n| ([$checks[] | select(failed) | (.completedAt\
+          \ // .startedAt // empty) | fromdateiso8601] | max) as $failed_at\n| (.issue.labels | map(.name))\
+          \ as $labels\n| [.comments[] | select(.body | startswith(\"agent run infra-failed: \")) | .body\
+          \ | ltrimstr(\"agent run infra-failed: \")] as $infra\n| [.comments[] | select(.body | startswith(\"\
+          agent run started: \")) | select(.body | ltrimstr(\"agent run started: \") | . as $u | $infra\
+          \ | index($u) | not)] as $started\n| (if $failed_at == null then \"not-red\"\n   elif ($checks\
+          \ | any(pending)) then \"pending\"\n   elif .pr.mergeStateStatus == \"DIRTY\" then \"conflicting\"\
+          \n   elif .issue.state != \"open\" then \"closed\"\n   elif (.issue.issue_dependencies_summary.blocked_by\
+          \ // 0) != 0 then \"blocked\"\n   elif ($labels | any(IN(\"agent-blocked\", \"needs-split\"\
+          , \"needs-orchestrator\", \"needs-nish-decision\", \"epic\"))) then \"label\"\n   elif ($started\
+          \ | length) > 0 and ($started[-1].createdAt | fromdateiso8601) >= $failed_at then \"run-after-failure\"\
+          \n   else \"go\" end) as $reason\n| {reason: $reason, run: ($started[-1].body // \"\")}\n"
+      run: "set -x\n# One issue as JSON for the sweep. Returns 0 with the JSON on stdout, 3 for an issue\n\
+        # that is gone (HTTP 404 or 410), 1 for any other failure after printing gh's error.\n# Measured\
+        \ 2026-10-12 with gh 2.93.0 on deleted issue 9502: exit 1, stdout the body\n# {\"message\":\"\
+        This issue was deleted\",...,\"status\":\"410\"}, stderr \"(HTTP 410)\"; either\n# marks it gone.\
+        \ Any other read fault stays fatal (fleet-ops#9553).\nissue_json() {\n  local out err rc=0\n \
+        \ err=$(mktemp)\n  out=$(gh api \"repos/$GITHUB_REPOSITORY/issues/$1\" 2>\"$err\") || rc=$?\n\
+        \  if [ \"$rc\" = 0 ]; then printf '%s\\n' \"$out\"; rm -f \"$err\"; return 0; fi\n  if [[ $(jq\
+        \ -r '.status // empty' <<<\"$out\" 2>/dev/null) =~ ^(404|410)$ ]] || grep -qE '\\(HTTP (404|410)\\\
+        )' \"$err\"; then\n    rm -f \"$err\"; return 3\n  fi\n  echo \"#$1: issue read failed: $(cat\
+        \ \"$err\") $out\" >&2; rm -f \"$err\"; return 1\n}\nstalled_refs='[]'\nif [ -n \"$ISSUE\" ];\
+        \ then\n  # One issue, no PR append: the jq below and agent.yml's Gate re-check, so a split or\
+        \ parked issue is skipped.\n  nums=$ISSUE\nelif [ -n \"$CLOSED\" ]; then\n  nums=$(gh api \"repos/$GITHUB_REPOSITORY/issues/$CLOSED/dependencies/blocking\"\
+        \ --jq '.[]|select(.state==\"open\")|.number')\n  # A split parent never closed on its own, so\
+        \ everything blocked by it waited forever\n  # (0509, 2026-09-24: ~140 issues). Close each open\
+        \ ancestor whose sub-issues are all\n  # closed and release what it blocked (a GITHUB_TOKEN close\
+        \ fires no event). A\n  # critical-path or epic parent carries its own finish line, so it never\
+        \ closes here.\n  c=$CLOSED\n  while p=$(gh api \"repos/$GITHUB_REPOSITORY/issues/$c/parent\"\
+        \ --jq .number 2>/dev/null) &&\n    [ \"$(gh api \"repos/$GITHUB_REPOSITORY/issues/$p\" --jq '\"\
+        \\(.state) \\(.sub_issues_summary.total - .sub_issues_summary.completed)\\(if any(.labels[].name;\
+        \ . == \"critical-path\" or . == \"epic\") then \" own-finish-line\" else \"\" end)\"')\" = \"\
+        open 0\" ]; do\n    gh issue close \"$p\" -R \"$GITHUB_REPOSITORY\" -r completed -c \"every sub-issue\
+        \ is closed, the last was #$c; closing the parent\"\n    nums=\"$nums $(gh api \"repos/$GITHUB_REPOSITORY/issues/$p/dependencies/blocking\"\
+        \ --jq '.[]|select(.state==\"open\")|.number')\"\n    c=$p\n  done\nelse\n  gh issue list -R \"\
+        $GITHUB_REPOSITORY\" -S no:label -L 5 --json number --jq '.[].number' | xargs -rI{} gh issue edit\
+        \ {} -R \"$GITHUB_REPOSITORY\" --add-label needs-triage || echo \"::warning::triage labelling\
+        \ failed\"\n  # agent-in-progress left by a run that died with its runner and no claim PR goes\
+        \ back to agent-ready (fleet-ops#9063).\n  for n in $(gh issue list -R \"$GITHUB_REPOSITORY\"\
+        \ -l agent-in-progress -L 1000 --json number --jq '.[].number'); do\n    gh pr list -R \"$GITHUB_REPOSITORY\"\
+        \ --head \"claim/issue-$n\" --state open --json number --jq 'length' | grep -qx 0 || continue\n\
+        \    body=$(gh issue view \"$n\" -R \"$GITHUB_REPOSITORY\" --json comments --jq '[.comments[].body\
+        \ | select(startswith(\"agent run started:\"))] | last // \"\"')\n    [[ $body =~ actions/runs/([0-9]+)\
+        \ ]] || continue\n    # A failed read is not proof the run died: skip, never requeue a live worker.\n\
+        \    rv=$(gh run view \"${BASH_REMATCH[1]}\" -R \"$GITHUB_REPOSITORY\" --json status,jobs) ||\
+        \ { echo \"::warning::#$n: run read failed, skip\"; continue; }\n    if [ \"$(jq -r --arg ref\
+        \ \"claim/issue-$n\" \"$RUN_LIVE_JQ\" <<<\"$rv\")\" = false ]; then\n      gh issue edit \"$n\"\
+        \ -R \"$GITHUB_REPOSITORY\" --remove-label agent-in-progress --add-label agent-ready\n      echo\
+        \ \"requeued #$n: claimed with no live run and no claim PR\"\n      stalled_refs=$(jq -nc --argjson\
+        \ s \"$stalled_refs\" --arg r \"claim/issue-$n-miss-review\" '$s + [$r]')\n    fi\n  done\n  nums=$(gh\
+        \ issue list -R \"$GITHUB_REPOSITORY\" -l agent-ready -L 1000 --json number --jq '.[].number')\n\
+        \  # CONFLICTING too: auto-merge stays armed on a PR that turns DIRTY\n  # after arming, so it\
+        \ never enters the queue and no event fires (0509#4384).\n  # The bulk list returns mergeable\
+        \ UNKNOWN until GitHub recomputes after a push to main, so each\n  # armed PR is re-read (fleet-ops#8557).\
+        \ A merge-queue PR is dropped by ref below; it can have\n  # autoMergeRequest null (0509#4688),\
+        \ so the CONFLICTING test alone cannot drop it.\n  all=$(gh pr list -R \"$GITHUB_REPOSITORY\"\
+        \ -L 1000 --json number,headRefName,autoMergeRequest,isDraft,isCrossRepository,mergeable,labels\
+        \ \\\n    --jq '[.[] | select((.headRefName|startswith(\"claim/issue-\")) and (.isDraft|not))]')\n\
+        \  if queued=$(gh api graphql -f query=\"query{repository(owner:\\\"${GITHUB_REPOSITORY%/*}\\\"\
+        ,name:\\\"${GITHUB_REPOSITORY#*/}\\\"){mergeQueue{entries(first:100){nodes{pullRequest{headRefName}}}}}}\"\
+        \ \\\n    --jq '[.data.repository.mergeQueue.entries.nodes[]?.pullRequest.headRefName]'); then\n\
+        \    unarmed=$(jq -c '[.[] | select(.autoMergeRequest == null and (.labels | map(.name) | index(\"\
+        needs-coordinator\") | not)) | .headRefName]' <<<\"$all\")\n    conflicted=$(for pr in $(jq -r\
+        \ '.[] | select(.autoMergeRequest != null and .mergeable != \"MERGEABLE\") | .number' <<<\"$all\"\
+        ); do\n      for _ in 1 2 3; do\n        v=$(gh pr view \"$pr\" -R \"$GITHUB_REPOSITORY\" --json\
+        \ headRefName,mergeable)\n        [ \"$(jq -r .mergeable <<<\"$v\")\" != UNKNOWN ] && break\n\
+        \        sleep 10\n      done\n      jq -c 'select(.mergeable == \"CONFLICTING\") | .headRefName'\
+        \ <<<\"$v\"\n    done | jq -sc .)\n    # Armed claim PRs whose required checks never reported\
+        \ (fleet-ops#8777).\n    # BLOCKED with nothing pending and nothing failed means a required\n\
+        \    # check is absent. A pending check is left: it is running, not\n    # missing. A completed\
+        \ failure is left too: the red PRs case below\n    # owns that. A repo with no required checks\
+        \ is never BLOCKED by\n    # them, so it lists none (Nishfleet/drive, fleet-ops#8981).\n    missing=$(\n\
+        \      for pr in $(jq -r '.[] | select(.autoMergeRequest != null) | .number' <<<\"$all\"); do\n\
+        \        gh pr view \"$pr\" -R \"$GITHUB_REPOSITORY\" --json headRefName,statusCheckRollup,mergeStateStatus\
+        \ || exit 1\n      done | jq -sc \"$CHECK_DEFS\"'\n        [.[] | (.statusCheckRollup // []) as\
+        \ $checks\n          | select(.mergeStateStatus == \"BLOCKED\" and ($checks | any(pending) | not)\
+        \ and ($checks | any(failed) | not))\n          | .headRefName\n        ]'\n    )\n    # Claim\
+        \ PRs whose issue is still agent-in-progress after the worker\n    # is gone (fleet-ops#8777).\
+        \ Live means the newest \"agent run started:\"\n    # run is queued or in progress; `gh run view`\
+        \ is that read, judged by its work\n    # job (RUN_LIVE_JQ at the top of this file).\n    inprog=$(gh\
+        \ issue list -R \"$GITHUB_REPOSITORY\" -l agent-in-progress -L 1000 --json number --jq '[.[].number]')\n\
+        \    orphans=$(\n      jq -r --argjson ip \"$inprog\" '.[] | select(.labels | map(.name) | index(\"\
+        needs-coordinator\") | not) | .headRefName | capture(\"^claim/issue-(?<n>[0-9]+)$\").n | tonumber\
+        \ as $i | select($ip | index($i)) | $i' <<<\"$all\" |\n      while IFS= read -r n; do\n      \
+        \  body=$(gh issue view \"$n\" -R \"$GITHUB_REPOSITORY\" --json comments --jq '[.comments[].body\
+        \ | select(startswith(\"agent run started:\"))] | if length == 0 then \"\" else last end') ||\
+        \ exit 1\n        if [ -z \"$body\" ]; then\n          echo \"claim/issue-$n\"\n          continue\n\
+        \        fi\n        if [[ $body =~ actions/runs/([0-9]+) ]]; then\n          id=${BASH_REMATCH[1]}\n\
+        \        else\n          echo \"::error::agent run started comment on #$n has no run id\" >&2\n\
+        \          exit 1\n        fi\n        rv=$(gh run view \"$id\" -R \"$GITHUB_REPOSITORY\" --json\
+        \ status,jobs) || exit 1\n        live=$(jq -r --arg ref \"claim/issue-$n\" \"$RUN_LIVE_JQ\" <<<\"\
+        $rv\") || exit 1\n        [ \"$live\" = true ] || echo \"claim/issue-$n\"\n      done | jq -Rsc\
+        \ 'split(\"\\n\") | map(select(length > 0))'\n    )\n    # Red claim PRs the rework event missed\
+        \ (drive#765: no run fired;\n    # 0509#7182 #7172: rework hit lanes-full and nothing retried;\
+        \ every\n    # failure while FLEET_DISPATCH_PAUSED is true). An \"agent run\n    # started:\"\
+        \ newer than the failure, or a live newest run, leaves\n    # the PR alone; a rare overlap with\
+        \ the rework event is\n    # serialised by agent.yml's concurrency. The verdict is the\n    #\
+        \ RED_REWORK program above; liveness is `gh run view` on its\n    # newest counted run. A DIRTY\
+        \ PR is the conflicts job's. A PR at\n    # the 3-run cap is sent on so the Gate parks it.\n \
+        \   red=$(\n      set -o pipefail\n      for pr in $(jq -r '.[] | select((.isCrossRepository |\
+        \ not) and (.headRefName | test(\"^claim/issue-[0-9]+$\"))) | .number' <<<\"$all\"); do\n    \
+        \    v=$(gh pr view \"$pr\" -R \"$GITHUB_REPOSITORY\" --json headRefName,statusCheckRollup,mergeStateStatus)\
+        \ || exit 1\n        ref=$(jq -r .headRefName <<<\"$v\"); n=${ref#claim/issue-}\n        jq -e\
+        \ --argjson q \"$queued\" '.headRefName | IN($q[]) | not' <<<\"$v\" >/dev/null || continue\n \
+        \       # A claim PR outlives a deleted issue (gh api answers 410), and its empty comments\n \
+        \       # aborted the whole sweep (fleet-ops#9553). Skip the PR; any other read fault stays fatal.\n\
+        \        rc=0; issue=$(issue_json \"$n\") || rc=$?\n        case $rc in\n          0) ;;\n   \
+        \       3) echo \"#$n: issue gone, skipping claim PR $pr\" >&2; continue ;;\n          *) exit\
+        \ 1 ;;\n        esac\n        comments=$(gh issue view \"$n\" -R \"$GITHUB_REPOSITORY\" --json\
+        \ comments --jq .comments) || exit 1\n        verdict=$(jq -nc --slurpfile pr <(printf '%s' \"\
+        $v\") --slurpfile issue <(printf '%s' \"$issue\") --slurpfile comments <(printf '%s' \"$comments\"\
+        ) \\\n          '{pr: ($pr[0] | objects // error(\"pr\")), issue: ($issue[0] | objects // error(\"\
+        issue\")), comments: ($comments[0] | arrays // error(\"comments\"))}' | jq -c \"$CHECK_DEFS $RED_REWORK\"\
+        ) || exit 1\n        [ \"$(jq -r .reason <<<\"$verdict\")\" = go ] || continue\n        if [[\
+        \ $(jq -r .run <<<\"$verdict\") =~ actions/runs/([0-9]+) ]]; then\n          rv=$(gh run view\
+        \ \"${BASH_REMATCH[1]}\" -R \"$GITHUB_REPOSITORY\" --json status,jobs) || exit 1\n          if\
+        \ [ \"$(jq -r --arg ref \"$ref\" \"$RUN_LIVE_JQ\" <<<\"$rv\")\" != false ]; then echo \"#$n: run\
+        \ live, skip\" >&2; continue; fi\n        fi\n        echo \"$ref\"\n      done | jq -Rsc 'split(\"\
+        \\n\") | map(select(length > 0))'\n    )\n    prs=$(jq -nc --argjson a \"$unarmed\" --argjson\
+        \ b \"$conflicted\" --argjson m \"$missing\" --argjson o \"$orphans\" --argjson d \"$red\" --argjson\
+        \ q \"$queued\" '(reduce ($a[], $b[], $m[], $o[], $d[]) as $r ([]; if index($r) then . else .\
+        \ + [$r] end)) - $q')\n    echo \"claim PRs missing required checks: $missing\"\n    echo \"claim\
+        \ PRs with a dead agent run: $orphans\"\n    echo \"claim PRs red with no rework since: $red\"\
+        \n    echo \"claim PRs picked by the sweep: $prs\"\n  else\n    echo \"::warning::merge-queue\
+        \ read failed; skipping all claim-PR re-dispatch this run\"\n    prs='[]'\n  fi\nfi\n# Gone-issue\
+        \ skip as above; this loop runs in the shell, so any other read fault aborts the sweep.\npages=''\n\
+        for n in $nums; do\n  rc=0; i=$(issue_json \"$n\") || rc=$?\n  case $rc in\n    0) ;;\n    3)\
+        \ echo \"#$n: issue gone, skipping\" >&2; continue ;;\n    *) exit 1 ;;\n  esac\n  pages=\"$pages$i\"\
+        $'\\n'\n  # A closed blocker releases a parked hand-off: re-label it on the runner login so the\
+        \ label event starts it (fleet-ops#10489).\n  if [ -n \"$CLOSED\" ] && jq -e '.issue_dependencies_summary.blocked_by\
+        \ == 0 and any(.labels[].name; . == \"needs-orchestrator\")' <<<\"$i\" >/dev/null; then\n    for\
+        \ op in remove add; do env -u GH_TOKEN gh issue edit \"$n\" -R \"$GITHUB_REPOSITORY\" --$op-label\
+        \ needs-orchestrator || echo \"::warning::#$n: re-fire refused\"; done\n  fi\ndone\n# agent.yml's\
+        \ Gate skips these five labels (a ref with one wastes a slot); ci.yml keeps the sets equal.\n\
+        refs=$(printf '%s' \"$pages\" |\n  jq -sc --argjson prs \"${prs:-[]}\" '[.[] | select(.issue_dependencies_summary.blocked_by\
+        \ == 0 and any(.labels[]; .name == \"agent-ready\"))]\n    | map(select(any(.labels[].name; IN(\"\
+        agent-blocked\",\"needs-split\",\"needs-orchestrator\",\"needs-nish-decision\",\"epic\")) | not))\n\
+        \    | sort_by((if any(.labels[]; .name == \"priority-now\") then 0 else 1 end), .created_at)\n\
+        \    | map(\"claim/issue-\\(.number)\") | . + ($prs - .) | .[:256]')\necho \"refs=${refs:-[]}\"\
+        \ >> \"$GITHUB_OUTPUT\"\necho \"stalled_refs=$stalled_refs\" >> \"$GITHUB_OUTPUT\"\n"
