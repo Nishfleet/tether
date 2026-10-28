@@ -28,6 +28,9 @@ asks first only before it messages someone else. No tool moves money.
   feature request to the fleet's `issue-desk` over Agent Tincan.
 - **Long answers.** A long reply is split into several texts in order, and the
   model can also send parts with `text_owner`.
+- **Morning brief.** One text every day at 08:00 (`TETHER_TIMEZONE`) with
+  today's calendar, reminders due today and the weather where you last were.
+  `brief_set` changes the time, `brief_off` stops it.
 
 ## Tools
 
@@ -37,6 +40,7 @@ asks first only before it messages someone else. No tool moves money.
 | `reminder_set`, `reminder_list`, `reminder_cancel` | reminders | no |
 | `location_request`, `location_last`, `places_nearby` | location and nearby places | no |
 | `text_owner`, `time_now` | an extra text, and the date | no |
+| `brief_set`, `brief_off` | change or stop the morning brief | no |
 | `web_search` | a web search, top 5 results | no |
 | `web_read` | one page as plain text | only for a link the owner did not send |
 | `calendar_list`, `calendar_create` | read and add your own events | no |
@@ -55,6 +59,16 @@ it, `NO` cancels it, and 24 hours of silence cancels it. `calendar_invite`,
 The `computer_*` tools drive Tether's own Cua Linux Space (`src/computer.ts`): no
 access to Nish's computers, files that stay between conversations, a command timeout
 of 1 to 900 seconds, and a read capped at 100000 bytes.
+
+## Morning brief
+
+Every day at 08:00 (`TETHER_TIMEZONE`) Tether texts one brief: today's calendar
+events, reminders due today, and the weather (Open-Meteo, no key) where you last
+were (Find My). A source that is not connected or fails is skipped, nothing is
+sent while Tether is stopped, and a brief more than 3 hours late is skipped.
+Text "brief at 7:30" or "stop the brief" to change it (`brief_set`, `brief_off`).
+It is one Pi Durable task (`tether.brief`) that sleeps until the next brief
+time, like a reminder, so a restart or a kill changes nothing.
 
 ## Model
 

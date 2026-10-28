@@ -179,6 +179,8 @@ describe("tether app, in process", () => {
     assert.match(JSON.stringify(last), /remember I prefer oat milk/);
     const names = (last?.tools ?? []).map((tool) => tool.function.name).sort();
     assert.deepEqual(names, [
+      "brief_off",
+      "brief_set",
       "location_last",
       "location_request",
       "memory_forget",

@@ -23,7 +23,7 @@ function describe(error: unknown): string {
   return error instanceof Error && error.name !== "Error" ? error.name : error instanceof Error ? error.message.slice(0, 120) : "unknown error";
 }
 
-function dedupe(events: readonly CalendarEvent[]): CalendarEvent[] {
+export function dedupe(events: readonly CalendarEvent[]): CalendarEvent[] {
   const merged = new Map<string, CalendarEvent>();
   for (const event of events) {
     const key = `${event.title.trim().toLowerCase()}|${event.start.getTime()}|${event.end.getTime()}`;
