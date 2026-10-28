@@ -18,7 +18,7 @@ export class Rig {
     await this.model.start();
   }
 
-  async boot(extra: Partial<Pick<TetherOptions, "fetch" | "timeZone" | "calendar" | "now" | "setTimer">> = {}): Promise<Tether> {
+  async boot(extra: Partial<Pick<TetherOptions, "fetch" | "timeZone" | "calendar" | "now" | "setTimer" | "searchApiKey">> = {}): Promise<Tether> {
     const { models, ref } = createModelAccess({ baseUrl: this.model.url, apiKey: KEY });
     this.tether = await startTether({
       channel: this.channel,
@@ -26,7 +26,6 @@ export class Rig {
       model: ref,
       storage: await openNodeSqliteStorage(join(this.dir, "t.sqlite")),
       allowedSender: ALLOWED,
-      salt: "test-salt",
       log: (event, fields) => {
         this.logs.push({ event, fields: { ...fields } });
         for (const waiter of this.waiters.splice(0)) {

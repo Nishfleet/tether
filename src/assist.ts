@@ -8,6 +8,7 @@ import { type Fetch, placesTool } from "./places.ts";
 import { createReminderTask, reminderTools } from "./reminders.ts";
 import type { ReplyInput, ReplyState } from "./reply.ts";
 import { textOwnerTool } from "./texts.ts";
+import { type Links, webTools } from "./web.ts";
 
 export type AssistOptions = {
   readonly channel: Channel;
@@ -17,10 +18,12 @@ export type AssistOptions = {
   readonly userAgent: string;
   readonly log: Log;
   readonly brief: BriefTask;
+  readonly links: Links;
+  readonly searchApiKey?: string;
 };
 
 export function createAssistExtension(options: AssistOptions): Extension {
-  const reminder = createReminderTask({ reply: options.reply });
+  const reminder = createReminderTask({ reply: options.reply, log: options.log });
   return defineExtension({
     name: "tether-assist",
     tools: [
@@ -30,6 +33,7 @@ export function createAssistExtension(options: AssistOptions): Extension {
       ...locationTools({ reply: options.reply, locations: options.channel.locations }),
       textOwnerTool({ channel: options.channel, log: options.log }),
       placesTool({ fetch: options.fetch, userAgent: options.userAgent, log: options.log, locations: options.channel.locations }),
+      ...webTools({ fetch: options.fetch, userAgent: options.userAgent, log: options.log, links: options.links, searchApiKey: options.searchApiKey }),
     ],
     tasks: [reminder, options.brief],
   });

@@ -64,7 +64,6 @@ describe("calendar in the running app", () => {
       model: ref,
       storage: await openNodeSqliteStorage(join(dir, "t.sqlite")),
       allowedSender: ALLOWED,
-      salt: "test-salt",
       log: () => undefined,
       retryBaseMs: 5,
       settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 }, stream: { maxRetries: 0 } },

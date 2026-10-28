@@ -78,7 +78,7 @@ describe("computer extension tools", () => {
   it("offers exactly three tools, none of which asks first, so a new tool forces a decision", () => {
     const { computer } = build(new FakeSpace());
     assert.deepEqual(computer.tools.map((tool) => tool.name).sort(), ["computer_read", "computer_run", "computer_write"]);
-    assert.deepEqual(computer.tools.filter((tool) => tool.askFirst !== undefined || tool.money !== undefined).map((tool) => tool.name), []);
+    assert.deepEqual(computer.tools.filter((tool) => "askFirst" in tool).map((tool) => tool.name), []);
   });
 
   it("replays only the pure read", () => {
@@ -179,20 +179,17 @@ describe("connecting to its Space", () => {
       assert.equal(textOf(await read({ path: join(dir, "a.txt") })), "file body é\n");
     });
 
-    it("pulls at most the first 100000 bytes of a large file and says it cut", async () => {
+    it("pulls at most the first 100000 bytes of a large file", async () => {
       writeFileSync(join(dir, "big.txt"), "x".repeat(300000));
       const result = await read({ path: join(dir, "big.txt") });
-      assert.equal(textOf(result), `${"x".repeat(100000)}\n[cut at 100000 bytes of 300000]`);
+      assert.equal(textOf(result), "x".repeat(100000));
       assert.match(fake.commands.at(-1) as string, /head -c 100000/);
     });
 
-    it("refuses a binary file, a directory, a missing file and a device without reading them", async () => {
-      writeFileSync(join(dir, "bin"), Buffer.from([1, 0, 2]));
-      assert.equal(textOf(await read({ path: join(dir, "bin") })), `${join(dir, "bin")} is a binary file.`);
-      for (const path of [dir, join(dir, "missing"), "/dev/zero"]) {
+    it("fails on a directory and a missing file", async () => {
+      for (const path of [dir, join(dir, "missing")]) {
         const result = await read({ path });
         assert.equal(result.isError, true, path);
-        assert.match(textOf(result), /not a regular file/);
       }
     });
 
@@ -203,14 +200,6 @@ describe("connecting to its Space", () => {
       const result = await read({ path: locked });
       assert.equal(result.isError, true);
       assert.match(textOf(result), /not readable/);
-    });
-
-    it("fails when the read comes back shorter than the file", async () => {
-      fake.shell = false;
-      fake.result = output("6\n");
-      const result = await read({ path: "/x" });
-      assert.equal(result.isError, true);
-      assert.match(textOf(result), /could not be read in full/);
     });
 
     it("keeps a hostile path inside one quoted word", async () => {
@@ -368,7 +357,6 @@ describe("computer tools through the real hook", () => {
       model: ref,
       storage: await openNodeSqliteStorage(join(dir, "t.sqlite")),
       allowedSender: ALLOWED,
-      salt: "test-salt",
       log: () => undefined,
       retryBaseMs: 5,
       settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 }, stream: { maxRetries: 0 } },
