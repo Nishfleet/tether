@@ -27,7 +27,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
-          pr="${{ inputs.pr }}"
+          pr="43"
           sha=$(gh pr view "$pr" -R "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)
           echo "repo=$GITHUB_REPOSITORY pr=$pr sha=$sha"
           echo "--- 1. gh pr view --json statusCheckRollup (list job shape) ---"
