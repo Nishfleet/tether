@@ -56,7 +56,6 @@ describe("morning brief", () => {
     }
   };
 
-  /** The owner has to have texted once so Tether knows the chat to brief. */
   const greet = async () => {
     rig.model.enqueue(say("Hi."));
     rig.channel.push(inbound("hello", "hi"));
@@ -99,8 +98,8 @@ describe("morning brief", () => {
     );
     const url = new URL(seen[0] ?? "");
     assert.equal(url.host, WEATHER_HOST);
-    assert.equal(url.searchParams.get("latitude"), "12.9689");
-    assert.equal(url.searchParams.get("longitude"), "77.5842");
+    assert.equal(url.searchParams.get("latitude"), "12.97");
+    assert.equal(url.searchParams.get("longitude"), "77.58");
     await clock.advance(24 * 60 * MIN);
     await until(() => briefs().length === 2);
   });
@@ -173,5 +172,19 @@ describe("morning brief", () => {
     await clock.advance(90 * MIN);
     assert.deepEqual(briefs(), []);
     assert.ok(rig.logs.some((entry) => entry.event === "brief_skipped" && entry.fields.reason === "stopped"));
+  });
+
+  it("calls no source while STOP is on", opts, async () => {
+    let listed = 0;
+    const seen: string[] = [];
+    rig.channel.locations = { current: async () => { listed += 1; return { latitude: 12.9689, longitude: 77.5842, label: null, at: Date.now() }; }, request: async () => true };
+    await boot({ calendar: calendarOf(async () => { listed += 1; return []; }), fetch: forecast(seen) });
+    await greet();
+    rig.channel.push(inbound("m1", "STOP"));
+    await until(() => rig.texts().includes(STOPPED_TEXT));
+    await clock.advance(90 * MIN);
+    assert.deepEqual(briefs(), []);
+    assert.equal(listed, 0);
+    assert.deepEqual(seen, []);
   });
 });

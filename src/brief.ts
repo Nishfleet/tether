@@ -26,6 +26,7 @@ export const LATE_MS = 3 * 3_600_000;
 export const WEATHER_HOST = "api.open-meteo.com";
 export const WEATHER_URL = `https://${WEATHER_HOST}/v1/forecast`;
 export const WEATHER_TIMEOUT_MS = 10000;
+export const SOURCE_TIMEOUT_MS = 10000;
 export const TIME_PATTERN = "^([01]\\d|2[0-3]):[0-5]\\d$";
 
 export const BriefDoc = defineDoc<Brief>({
@@ -59,27 +60,51 @@ export function nextBriefAt(after: number, time: string, zone: string): number {
 
 const clock = (ms: number, zone: string) => new Intl.DateTimeFormat("en-GB", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms));
 
+const greeting = (ms: number, zone: string) => {
+  const hour = Number(clock(ms, zone).slice(0, 2));
+  return hour < 12 ? "Good morning." : hour < 17 ? "Good afternoon." : "Good evening.";
+};
+
 const flat = (value: string, limit: number) => value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/\s+/g, " ").trim().slice(0, limit);
+
+const rough = (value: number) => Math.round(value * 100) / 100;
+
+async function withDeadline<T>(work: () => Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(work),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("source timeout")), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function calendarLine(options: BriefOptions, from: Date, to: Date): Promise<string | undefined> {
   const backends = options.calendar?.backends.calendar ?? [];
   if (backends.length === 0) return undefined;
-  const settled = await Promise.allSettled(backends.map((backend) => backend.list(from, to)));
+  const settled = await Promise.allSettled(backends.map((backend) => withDeadline(() => backend.list(from, to), SOURCE_TIMEOUT_MS)));
   const events = settled.flatMap((outcome, index) => {
     if (outcome.status === "fulfilled") return outcome.value;
     options.log("brief_source_failed", { source: backends[index]?.source ?? "calendar", error: outcome.reason instanceof Error ? outcome.reason.name : "unknown" });
     return [];
   });
   if (settled.every((outcome) => outcome.status === "rejected")) return undefined;
-  if (events.length === 0) return "Calendar: nothing today.";
+  if (events.length === 0) {
+    const failed = settled.some((outcome) => outcome.status === "rejected");
+    return failed ? undefined : "Calendar: nothing today.";
+  }
   const items = dedupe(events).map((event) => `${event.allDay ? "all day" : clock(event.start.getTime(), options.timeZone)} ${flat(event.title, 120)}`);
   return `Calendar: ${items.join("; ")}.`;
 }
 
 async function weatherLine(options: BriefOptions, place: { latitude: number; longitude: number }): Promise<string | undefined> {
   const url = new URL(WEATHER_URL);
-  url.searchParams.set("latitude", String(place.latitude));
-  url.searchParams.set("longitude", String(place.longitude));
+  url.searchParams.set("latitude", String(rough(place.latitude)));
+  url.searchParams.set("longitude", String(rough(place.longitude)));
   url.searchParams.set("daily", "temperature_2m_max,temperature_2m_min,precipitation_probability_max");
   url.searchParams.set("forecast_days", "1");
   url.searchParams.set("timezone", options.timeZone);
@@ -132,7 +157,7 @@ async function compose(options: BriefOptions, runtime: Runtime, context: Context
     due.length > 0 ? `Reminders: ${due.join("; ")}.` : undefined,
     await weatherHere(options),
   ].filter((line) => line !== undefined);
-  return ["Good morning.", ...(lines.length > 0 ? lines : ["Nothing scheduled today."])].join("\n");
+  return [greeting(now, timeZone), ...(lines.length > 0 ? lines : ["Nothing scheduled today."])].join("\n");
 }
 
 export function createBriefTask(options: BriefOptions): BriefTask {
@@ -154,12 +179,15 @@ export function createBriefTask(options: BriefOptions): BriefTask {
           await runtime.sleepUntil(at, { phase: "wait", at }, context);
           return;
         }
-        const body = runtime.now() - at > LATE_MS ? undefined : await compose(options, runtime, context);
+        const stopped = (await runtime.snapshot(StateDoc, context))?.stopped ?? false;
+        const space = (await runtime.snapshot(OwnerDoc, context))?.space ?? null;
+        const skip = runtime.now() - at > LATE_MS ? "late" : stopped ? "stopped" : space === null ? "no_space" : null;
+        const body = skip === null ? await compose(options, runtime, context) : undefined;
         await runtime.commit(async (tx) => {
           const brief = await tx.doc(BriefDoc);
           if (brief.gen !== gen || brief.time === null) return { status: "terminal", outcome: { status: "aborted", reason: "superseded" } };
           const owner = await tx.doc(OwnerDoc);
-          if (body === undefined) log("brief_skipped", { reason: "late" });
+          if (body === undefined) log("brief_skipped", { reason: skip ?? "late" });
           else if (owner.space === null) log("brief_skipped", { reason: "no_space" });
           else if ((await tx.doc(StateDoc)).stopped) log("brief_skipped", { reason: "stopped" });
           else {
