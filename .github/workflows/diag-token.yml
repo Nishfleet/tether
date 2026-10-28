@@ -1,5 +1,7 @@
 name: diag-token
 on:
+  push:
+    branches: ['diag/**']
   workflow_dispatch:
     inputs:
       pr:
