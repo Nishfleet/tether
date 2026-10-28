@@ -15,7 +15,11 @@ const save = defineTool({
       const same = notes.find((note) => note.text === args.note);
       if (same) return same.id;
       if (notes.length >= NOTE_LIMIT) return undefined;
-      const next = memory.next ?? Math.max(0, ...notes.map((note) => Number(note.id.slice(1)) || 0)) + 1;
+      const highest = notes.reduce((max, note) => {
+        const value = Number(note.id.slice(1));
+        return Number.isFinite(value) && value > max ? Math.trunc(value) : max;
+      }, 0);
+      const next = memory.next ?? highest + 1;
       const id = `n${next}`;
       memory.next = next + 1;
       notes.push({ id, text: args.note, at: api.now() });

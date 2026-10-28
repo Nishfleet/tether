@@ -1,0 +1,23 @@
+# Stock dependency watch for the actions this repo pins.
+# Every `uses:` in .github/workflows/** is pinned to a full commit SHA with a
+# version comment; Dependabot is the half of GitHub's pin-and-bump pairing that
+# moves those SHAs, so a pin that only a human can bump is a rotting pin.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:35"
+      timezone: Asia/Kolkata
+    cooldown:
+      default-days: 3
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: ci
+    groups:
+      github-actions:
+        patterns:
+          - "*"

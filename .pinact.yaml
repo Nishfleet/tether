@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/suzuki-shunsuke/pinact/main/json-schema/pinact.json
+# pinact config: `pinact run` pins every other `uses:` to a commit SHA.
+# This repo has no `docker://` ref and no composite action under .github/actions/**,
+# so the fleet-ops caller is the only ref the config has to exempt.
+version: 3
+ignore_actions:
+  # Called at @main on purpose. The runner group that serves agent jobs allows
+  # only these workflows at refs/heads/main, so a SHA pin here drifts from
+  # agent.yml@main and strands every dispatched job (0509#5231).
+  #
+  # pinact matches the name and the ref exactly, so `maintenance` and
+  # `XNishfleet/fleet-ops/...@main` are still checked (verified 2026-10-23).
+  - name: Nishfleet/fleet-ops/.*
+    ref: main

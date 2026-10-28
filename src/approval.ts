@@ -46,6 +46,7 @@ export type ApprovalState = {
 
 export const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 export const SUMMARY_CHARS = 200;
+export const ASK_CHARS = 2400;
 export const MAX_TIMER_MS = 2 ** 31 - 1;
 export const BLOCKS: Record<Exclude<ApprovalStatus, "pending" | "approved">, string> = {
   denied: "Blocked: Nish answered NO, so this was not run.",
@@ -66,9 +67,9 @@ export const askText = (summary: string) => `Allow this? ${summary} Reply YES to
 
 export type Notify = (tx: Tx, space: string, text: string) => Promise<void>;
 
-const oneLine = (value: string) => {
+const oneLine = (value: string, limit = SUMMARY_CHARS) => {
   const flat = value.replace(/\s+/g, " ").trim();
-  return flat.length > SUMMARY_CHARS ? `${flat.slice(0, SUMMARY_CHARS - 1)}…` : flat;
+  return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
 };
 
 export function describeCall(call: Pick<ToolHookCall, "name" | "arguments">): string {
@@ -185,7 +186,7 @@ export function createApprovalExtension(options: ApprovalOptions): Extension {
             if ((await tx.doc(StateDoc)).stopped) return "stopped";
             const { space } = await tx.doc(OwnerDoc);
             if (space === null) return "no_chat";
-            doc.items.push({ key, summary: oneLine(summary), space, expiresAt, asked: false, status: "pending" });
+            doc.items.push({ key, summary: oneLine(summary, rule === true ? SUMMARY_CHARS : ASK_CHARS), space, expiresAt, asked: false, status: "pending" });
             await promote(tx, notify);
             return "pending";
           }, base);

@@ -22,6 +22,7 @@ export type Config = {
   readonly stateDir: string;
   readonly timeZone: string;
   readonly computer: ComputerConfig | undefined;
+  readonly searchApiKey: string | undefined;
   readonly tincan: TincanConfig | undefined;
 };
 
@@ -81,6 +82,7 @@ export function loadConfig(env: Env): Config {
     stateDir,
     timeZone,
     computer: loadComputerConfig(env, stateDir),
+    searchApiKey: env.TETHER_SEARCH_API_KEY?.trim() || undefined,
     tincan: loadTincanConfig(env),
   };
 }

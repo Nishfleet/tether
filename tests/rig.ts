@@ -19,7 +19,7 @@ export class Rig {
     await this.model.start();
   }
 
-  async boot(extra: { fetch?: Fetch; timeZone?: string } = {}): Promise<Tether> {
+  async boot(extra: { fetch?: Fetch; timeZone?: string; searchApiKey?: string } = {}): Promise<Tether> {
     const { models, ref } = createModelAccess({ baseUrl: this.model.url, apiKey: KEY });
     this.tether = await startTether({
       channel: this.channel,

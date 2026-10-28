@@ -42,6 +42,7 @@ export async function run(
     allowedSender: config.allowedSender,
     log,
     timeZone: config.timeZone,
+    searchApiKey: config.searchApiKey,
     ...(calendar ? { calendar } : {}),
     ...(email ? { email } : {}),
     ...(overrides.retryBaseMs === undefined ? {} : { retryBaseMs: overrides.retryBaseMs }),
