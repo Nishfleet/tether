@@ -1,8 +1,10 @@
-import { isIP } from "node:net";
+import { promises as dns, type LookupAddress } from "node:dns";
+import { BlockList, isIP, type LookupFunction } from "node:net";
 import { Readability } from "@mozilla/readability";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
 import { parseHTML } from "linkedom";
+import { Agent } from "undici";
 import type { Log } from "./log.ts";
 import type { Fetch } from "./places.ts";
 import { defineAskFirstTool } from "./approval.ts";
@@ -86,6 +88,32 @@ export function pageTarget(raw: string): URL | undefined {
   if (isIP(bare) !== 0 || local) return undefined;
   return url;
 }
+
+const NOT_PUBLIC = new BlockList();
+for (const [net, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.168.0.0", 16], ["224.0.0.0", 4], ["240.0.0.0", 4]] as const) NOT_PUBLIC.addSubnet(net, prefix, "ipv4");
+for (const [net, prefix] of [["::", 128], ["::1", 128], ["64:ff9b::", 96], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8]] as const) NOT_PUBLIC.addSubnet(net, prefix, "ipv6");
+
+export const publicAddress = (address: string): boolean => isIP(address) !== 0 && !NOT_PUBLIC.check(address, isIP(address) === 6 ? "ipv6" : "ipv4");
+
+export function publicLookup(resolve: (host: string) => Promise<LookupAddress[]> = (host) => dns.lookup(host, { all: true })): LookupFunction {
+  return (host, options, callback) => {
+    resolve(host).then(
+      (addresses) => {
+        const first = addresses[0];
+        if (!first || !addresses.every((entry) => publicAddress(entry.address))) {
+          callback(Object.assign(new Error(`${host} is not on the public web`), { code: "ENOTPUBLIC" }), "", 0);
+        } else if (options.all) {
+          (callback as unknown as (error: null, all: LookupAddress[]) => void)(null, addresses);
+        } else {
+          callback(null, first.address, first.family);
+        }
+      },
+      (error: NodeJS.ErrnoException) => callback(error, "", 0),
+    );
+  };
+}
+
+const publicWeb = new Agent({ connect: { lookup: publicLookup() } });
 
 const LINK_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
 
@@ -177,7 +205,7 @@ export function clean(text: string): string {
 export async function readPage(fetcher: Fetch, userAgent: string, url: URL): Promise<Page> {
   const first = pageTarget(url.toString());
   if (!first) throw new Error("not a public web link");
-  const init = { headers: { "user-agent": userAgent, accept: "text/html,application/xhtml+xml,text/plain;q=0.9" }, signal: AbortSignal.timeout(READ_TIMEOUT_MS), redirect: "manual" as const };
+  const init = { headers: { "user-agent": userAgent, accept: "text/html,application/xhtml+xml,text/plain;q=0.9" }, signal: AbortSignal.timeout(READ_TIMEOUT_MS), redirect: "manual" as const, dispatcher: publicWeb };
   let target = first;
   let response = await fetcher(target.toString(), init);
   for (let hop = 0; response.status >= 300 && response.status < 400; hop++) {

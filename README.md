@@ -176,8 +176,10 @@ his data out. It returns the article text through `@mozilla/readability`, at mos
 20000 characters, and only an http or https link to a public host is accepted:
 an IP address, `localhost` or a `.local` name (with or without a trailing dot)
 is refused before any request, and a redirect is followed only to a link that
-passes the same check, at most 5 hops. The check reads the name, not the address
-it resolves to, so the host firewall stays the last line.
+passes the same check, at most 5 hops. The connection itself resolves the name
+and refuses to connect when any address is loopback, private, link-local,
+carrier-grade NAT, multicast or unspecified, so it only ever dials an address
+that passed the check. The host firewall stays the last line.
 Both tools only read, and both mark what they return as untrusted data.
 
 ## Email and fleet
