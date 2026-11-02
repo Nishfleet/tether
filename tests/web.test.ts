@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { Links, NOTE, MAX_HTML_BYTES, MAX_REDIRECTS, MAX_PAGE_CHARS, SEARCH_RESULTS, SEARCH_URL, SNIPPET_CHARS, clean, formatResults, pageTarget, readPage, reason, searchWeb, webTools } from "../src/web.ts";
+import { Links, NOTE, MAX_HTML_BYTES, MAX_REDIRECTS, MAX_PAGE_CHARS, SEARCH_RESULTS, SEARCH_URL, SNIPPET_CHARS, clean, formatResults, pageTarget, publicAddress, publicLookup, readPage, reason, searchWeb, webTools } from "../src/web.ts";
 
 type Seen = { url: string; init: { headers: Record<string, string>; redirect: string; method?: string; body?: string } };
 
@@ -111,6 +111,47 @@ describe("page target", () => {
       assert.equal(pageTarget(bad), undefined, bad);
     }
     assert.ok(pageTarget("https://tea.test./"), "a trailing dot on a public host stays allowed, so the refusals above are not vacuous");
+  });
+});
+
+describe("connect-time address check", () => {
+  const dial = (answer: string[], all = true) =>
+    new Promise<{ error: NodeJS.ErrnoException | null; address: unknown }>((done) => {
+      const lookup = publicLookup(async () => answer.map((address) => ({ address, family: address.includes(":") ? 6 : 4 })));
+      lookup("tea.test", { all }, (error, address) => done({ error, address }));
+    });
+
+  it("refuses a name that resolves to loopback", async () => {
+    assert.equal((await dial(["127.0.0.1"])).error?.code, "ENOTPUBLIC");
+  });
+
+  it("refuses a name that resolves to a private range, even next to a public answer", async () => {
+    assert.equal((await dial(["10.0.0.5"])).error?.code, "ENOTPUBLIC");
+    assert.equal((await dial(["93.184.215.14", "10.0.0.5"])).error?.code, "ENOTPUBLIC");
+  });
+
+  it("passes a name that resolves to a public address and hands that address to the socket", async () => {
+    assert.deepEqual(await dial(["93.184.215.14"]), { error: null, address: [{ address: "93.184.215.14", family: 4 }] });
+    assert.deepEqual(await dial(["93.184.215.14"], false), { error: null, address: "93.184.215.14" });
+  });
+
+  it("knows which addresses are public", () => {
+    for (const bad of ["127.0.0.1", "10.0.0.5", "172.16.0.1", "192.168.1.1", "100.64.0.1", "169.254.169.254", "0.0.0.0", "224.0.0.1", "::", "::1", "fd00::1", "fe80::1", "ff02::1", "::ffff:127.0.0.1", "::ffff:10.0.0.5", "64:ff9b::7f00:1"]) {
+      assert.equal(publicAddress(bad), false, bad);
+    }
+    for (const good of ["93.184.215.14", "1.1.1.1", "2606:4700::1111", "::ffff:93.184.215.14"]) assert.equal(publicAddress(good), true, good);
+  });
+
+  it("readPage sends every hop through the checked connection", async () => {
+    const seen: Seen[] = [];
+    await readPage(hops(["https://tea.test/b"], seen), "ua", new URL("https://tea.test/a"));
+    assert.equal(seen.length, 2);
+    assert.ok(seen.every((call) => (call.init as { dispatcher?: unknown }).dispatcher !== undefined));
+  });
+
+  it("still refuses a literal IP in the link, public or not", () => {
+    assert.equal(pageTarget("http://93.184.215.14/"), undefined);
+    assert.equal(pageTarget("http://[2606:4700::1111]/"), undefined);
   });
 });
 

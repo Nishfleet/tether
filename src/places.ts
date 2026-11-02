@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
+import type { Dispatcher } from "undici";
 import type { Log } from "./log.ts";
 import type { Locations } from "./channel.ts";
 import { describeAge, describeCoordinates, type Coordinates } from "./location.ts";
@@ -16,7 +17,7 @@ export const ATTRIBUTION = "Data: OpenStreetMap contributors, via Photon. Place 
 
 export type Fetch = (
   input: string,
-  init: { headers: Record<string, string>; signal: AbortSignal; redirect: "error" | "follow" | "manual"; method?: string; body?: string },
+  init: { headers: Record<string, string>; signal: AbortSignal; redirect: "error" | "follow" | "manual"; method?: string; body?: string; dispatcher?: Dispatcher },
 ) => Promise<Response>;
 
 export type Place = {

@@ -20,7 +20,8 @@
     "ical.js": "2.2.1",
     "linkedom": "0.18.14",
     "spectrum-ts": "12.13.0",
-    "tsdav": "2.5.0"
+    "tsdav": "2.5.0",
+    "undici": "6.29.1"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
