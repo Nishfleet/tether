@@ -20,9 +20,10 @@ export class FakeDav {
   url = "";
 
   async start(): Promise<void> {
-    this.server = createServer((req, res) => void this.handle(req, res));
-    await new Promise<void>((resolve) => this.server?.listen(0, "127.0.0.1", resolve));
-    this.url = `http://127.0.0.1:${(this.server?.address() as AddressInfo).port}`;
+    const server = createServer((req, res) => void this.handle(req, res));
+    this.server = server;
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    this.url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   }
 
   async stop(): Promise<void> {

@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": { "correctness": "error" },
+  "rules": {
+    "no-restricted-globals": ["error", { "name": "fetch", "message": "Take the injected Fetch. src/app.ts is the one place that passes the global fetch in." }],
+    "unicorn/no-useless-spread": "off",
+    "no-restricted-imports": ["error", { "paths": [{ "name": "@earendil-works/pi-durable", "importNames": ["defineTool"], "message": "Use defineAskFirstTool from src/approval.ts, so every tool states askFirst." }] }]
+  },
+  "overrides": [
+    { "files": ["src/app.ts"], "rules": { "no-restricted-globals": "off" } }
+  ]
+}
