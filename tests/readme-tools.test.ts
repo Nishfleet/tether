@@ -45,6 +45,7 @@ function readmeRows(): Map<string, string> {
   return rows;
 }
 
+// oxlint-disable-next-line no-comments/disallowComments
 // A function rule can ask every time (email_send) or only sometimes (web_read), so its README cell is written here.
 const ruleCells: Record<string, string> = { email_send: "yes", web_read: "only for a link the owner did not send" };
 const asks = (tool: AnyGuardedTool) =>
