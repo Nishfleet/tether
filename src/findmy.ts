@@ -56,6 +56,7 @@ export function createFindMy(options: FindMyOptions): Locations & { close(): Pro
     return opening;
   };
 
+  // oxlint-disable-next-line no-comments/disallowComments
   // A call refused as unauthenticated holds an expired token: drop the client, issue a new token, and try once more.
   const lease = async <T>(use: (client: AdvancedIMessage) => Promise<T>): Promise<T> => {
     if (closed) throw new Error("closed");
@@ -104,6 +105,7 @@ export function createFindMy(options: FindMyOptions): Locations & { close(): Pro
       closed = true;
       const open = client;
       client = undefined;
+      // oxlint-disable-next-line no-comments/disallowComments
       // A token still being issued is not waited for: connect() refuses to open a client once closed.
       void open?.then((old) => old.close()).catch(() => undefined);
     },
