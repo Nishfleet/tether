@@ -45,8 +45,10 @@ function readmeRows(): Map<string, string> {
   return rows;
 }
 
-const asks = (rule: AnyGuardedTool["askFirst"]) => (!rule ? "no" : rule === true ? "yes" : "by rule");
-const fits = (cell: string, rule: string) => (rule === "by rule" ? cell !== "no" : cell === rule);
+// A function rule can ask every time (email_send) or only sometimes (web_read), so its README cell is written here.
+const ruleCells: Record<string, string> = { email_send: "yes", web_read: "only for a link the owner did not send" };
+const asks = (tool: AnyGuardedTool) =>
+  !tool.askFirst ? "no" : tool.askFirst === true ? "yes" : (ruleCells[tool.name] ?? `a README word for ${tool.name} in ruleCells`);
 
 it("the README tools table lists every tool once, with the ask-first rule the code has", () => {
   const rows = readmeRows();
@@ -54,6 +56,6 @@ it("the README tools table lists every tool once, with the ask-first rule the co
   assert.deepEqual([...rows.keys()].sort(), tools.map((tool) => tool.name).sort());
   for (const tool of tools) {
     const cell = rows.get(tool.name)!;
-    assert.ok(fits(cell, asks(tool.askFirst)), `${tool.name}: README says "${cell}", code asks ${asks(tool.askFirst)}`);
+    assert.equal(cell, asks(tool), `${tool.name}: README says "${cell}", code asks ${asks(tool)}`);
   }
 });
