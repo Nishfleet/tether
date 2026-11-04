@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
-import { defineTool } from "@earendil-works/pi-durable";
+import { defineAskFirstTool } from "./approval.ts";
 import type { Channel } from "./channel.ts";
 import { StateDoc } from "./docs.ts";
 import type { Log } from "./log.ts";
@@ -10,8 +10,9 @@ export const TEXT_CHARS = 3500;
 
 export function textOwnerTool(options: { channel: Channel; log: Log }) {
   const { channel, log } = options;
-  return defineTool({
+  return defineAskFirstTool({
     name: "text_owner",
+    askFirst: false,
     description: `Text the owner one extra message right now, before your final answer. Use it to send a long answer in parts: call it once for each part in order, then write the last part as your final answer. At most ${TEXT_CHARS} characters each.`,
     parameters: Type.Object({ text: Type.String({ minLength: 1, maxLength: TEXT_CHARS }) }),
     executionMode: "sequential",

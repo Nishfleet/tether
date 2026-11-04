@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { Type } from "@earendil-works/pi-ai";
-import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
+import { type AnyGuardedTool, defineAskFirstTool } from "./approval.ts";
 import type { ProcessOutput, SpacesdClientLike } from "@trycua/cua";
 import type { ComputerConfig } from "./config.ts";
 import type { Log } from "./log.ts";
@@ -29,7 +29,7 @@ export type ComputerDeps = {
 };
 
 export type Computer = {
-  readonly tools: readonly ToolRegistration[];
+  readonly tools: readonly AnyGuardedTool[];
   startup(): Promise<void>;
 };
 
@@ -104,8 +104,9 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
     return (Number.isFinite(seconds) ? Math.max(1, seconds) : DEFAULT_TIMEOUT_SEC) * 1000;
   };
 
-  const run = defineTool({
+  const run = defineAskFirstTool({
     name: "computer_run",
+    askFirst: false,
     description:
       "Run a shell command in your own computer: a persistent Linux machine that keeps its files between conversations. Returns the exit code, stdout and stderr. It is separate from Nish's own computers.",
     parameters: Type.Object({
@@ -120,8 +121,9 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
       }),
   });
 
-  const write = defineTool({
+  const write = defineAskFirstTool({
     name: "computer_write",
+    askFirst: false,
     description: "Write a text file in your own computer, replacing it if it exists.",
     parameters: Type.Object({ path: Type.String({ minLength: 1 }), content: Type.String() }),
     replay: "unsafe",
@@ -132,8 +134,9 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
       }),
   });
 
-  const read = defineTool({
+  const read = defineAskFirstTool({
     name: "computer_read",
+    askFirst: false,
     description: `Read a text file from your own computer. Shows at most ${READ_BYTES} bytes.`,
     parameters: Type.Object({ path: Type.String({ minLength: 1 }) }),
     replay: "safe",
@@ -154,5 +157,5 @@ export function createComputer(config: ComputerConfig, log: Log, deps: ComputerD
     }
   };
 
-  return { tools: [run, write, read] as readonly ToolRegistration[], startup };
+  return { tools: [run, write, read] as readonly AnyGuardedTool[], startup };
 }

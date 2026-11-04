@@ -57,7 +57,7 @@ describe("fleet_request", () => {
     const { tools } = build(answered("x"));
     assert.deepEqual(
       tools.map((tool) => [tool.name, tool.askFirst]),
-      [["fleet_request", undefined]],
+      [["fleet_request", false]],
     );
   });
 

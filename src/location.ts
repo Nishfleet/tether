@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
-import { defineTool, type Task } from "@earendil-works/pi-durable";
+import { type Task } from "@earendil-works/pi-durable";
+import { defineAskFirstTool } from "./approval.ts";
 import type { Locations } from "./channel.ts";
 import { OwnerDoc } from "./owner.ts";
 import type { ReplyInput, ReplyState } from "./reply.ts";
@@ -41,8 +42,9 @@ export function describeCoordinates(where: Coordinates): string {
 export function locationTools(options: { reply: Task<ReplyInput, ReplyState, null, object>; locations: Locations | undefined }) {
   const { reply, locations } = options;
 
-  const request = defineTool({
+  const request = defineAskFirstTool({
     name: "location_request",
+    askFirst: false,
     description:
       "Ask the owner to share their location. It sends a Find My request card in the chat, and the owner taps Share. Use it when you need to know where they are, for example before a nearby-places search with no known location. The request is already sent, so do not repeat the steps. Their location is readable only after they accept.",
     parameters: Type.Object({}),
@@ -60,8 +62,9 @@ export function locationTools(options: { reply: Task<ReplyInput, ReplyState, nul
     },
   });
 
-  const last = defineTool({
+  const last = defineAskFirstTool({
     name: "location_last",
+    askFirst: false,
     description: "Read where the owner is from Find My, with how long ago it was. Nothing comes back unless they are sharing.",
     parameters: Type.Object({}),
     replay: "safe",

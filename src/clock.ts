@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
-import { defineTool } from "@earendil-works/pi-durable";
+import { defineAskFirstTool } from "./approval.ts";
 import { text } from "./tool.ts";
 
 export const DEFAULT_TIME_ZONE = "Asia/Kolkata";
@@ -49,8 +49,9 @@ export function humanInZone(ms: number, timeZone: string): string {
 }
 
 export function clockTool(timeZone: string) {
-  return defineTool({
+  return defineAskFirstTool({
     name: "time_now",
+    askFirst: false,
     description: "Get the current date and time in the owner's time zone. Call it before you turn a clock time or a date into the `at` value of reminder_set.",
     parameters: Type.Object({}),
     replay: "safe",
