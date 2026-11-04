@@ -33,3 +33,4 @@
 # Secrets and the ask-first guard on actions.
 /src/config.ts              @nish3451
 /src/approval.ts            @nish3451
+/src/calendar/config.ts     @nish3451
