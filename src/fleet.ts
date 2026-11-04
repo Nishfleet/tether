@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { Type } from "@earendil-works/pi-ai";
-import { defineTool } from "@earendil-works/pi-durable";
-import { type AnyGuardedTool } from "./approval.ts";
+import { type AnyGuardedTool, defineAskFirstTool } from "./approval.ts";
 import type { TincanConfig } from "./config.ts";
 import type { Log } from "./log.ts";
 import { failure, text } from "./tool.ts";
@@ -47,8 +46,9 @@ export function createFleetTools(config: TincanConfig, log: Log, run: Run = defa
   if (process.env.HOME) env.HOME = process.env.HOME;
   if (process.env.PATH) env.PATH = process.env.PATH;
 
-  const request = defineTool({
+  const request = defineAskFirstTool({
     name: "fleet_request",
+    askFirst: false,
     description: `Send one request for a change to a product (for example "fix the site" or "add a feature") to the fleet's ${DESK}, which turns it into an issue. Call it only when the owner clearly asks for such a change. Write the request as one plain sentence. Tell the owner the one line it returns: the issue link, the request id, or why it failed.`,
     parameters: Type.Object({ text: Type.String({ minLength: 1, maxLength: 2000 }) }),
     replay: "unsafe",

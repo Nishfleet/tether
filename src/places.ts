@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai";
-import { defineTool } from "@earendil-works/pi-durable";
+import { defineAskFirstTool } from "./approval.ts";
 import type { Dispatcher } from "undici";
 import type { Log } from "./log.ts";
 import type { Locations } from "./channel.ts";
@@ -142,8 +142,9 @@ export function formatPlaces(places: readonly Place[]): string {
 
 export function placesTool(options: { fetch: Fetch; userAgent: string; log: Log; locations: Locations | undefined }) {
   const { fetch: fetcher, userAgent, log, locations } = options;
-  return defineTool({
+  return defineAskFirstTool({
     name: "places_nearby",
+    askFirst: false,
     description:
       "Find places near the owner, such as coffee shops, pharmacies or restaurants, from a free read-only OpenStreetMap lookup. By default it searches around the last location the owner shared (see location_request). Pass `near` with a place name to search around that place instead. Results are sorted by distance.",
     parameters: Type.Object({

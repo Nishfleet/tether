@@ -18,11 +18,11 @@ import { OwnerDoc } from "./owner.ts";
 export type AskFirst<Args = Record<string, unknown>> = true | ((args: Args) => string | undefined);
 
 export type GuardedTool<P extends TSchema = TSchema, D extends JsonValue = JsonValue> = ToolRegistration<P, D> & {
-  readonly askFirst?: AskFirst<Static<P>>;
+  readonly askFirst: AskFirst<Static<P>> | false;
 };
 
 export type AnyGuardedTool = ToolRegistration & {
-  readonly askFirst?: true | ((args: never) => string | undefined);
+  readonly askFirst: true | false | ((args: never) => string | undefined);
 };
 
 export function defineAskFirstTool<P extends TSchema, D extends JsonValue = JsonValue>(tool: GuardedTool<P, D>): GuardedTool<P, D> {
@@ -173,8 +173,8 @@ export function createApprovalExtension(options: ApprovalOptions): Extension {
         beforeTool: async (call, api, context) => {
           const tool = lookup(call.name);
           if (!tool) return undefined;
-          const rule = tool.askFirst;
-          if (rule === undefined) return undefined;
+          const rule = tool.askFirst ?? true;
+          if (rule === false) return undefined;
           const summary = rule === true ? describeCall(call) : (rule as (args: typeof call.arguments) => string | undefined)(call.arguments);
           if (!summary) return undefined;
           const key = `${api.taskId}:${call.id}`;

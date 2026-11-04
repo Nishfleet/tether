@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
-import { defineDoc, defineTask, defineTool, type Task } from "@earendil-works/pi-durable";
+import { defineDoc, defineTask, type Task } from "@earendil-works/pi-durable";
+import { defineAskFirstTool } from "./approval.ts";
 import { humanInZone } from "./clock.ts";
 import { StateDoc } from "./docs.ts";
 import type { Log } from "./log.ts";
@@ -94,8 +95,9 @@ export function parseInstant(value: string): number | undefined {
 export function reminderTools(options: { task: ReminderTask; timeZone: string }) {
   const { task, timeZone } = options;
 
-  const set = defineTool({
+  const set = defineAskFirstTool({
     name: "reminder_set",
+    askFirst: false,
     description:
       "Set a reminder or alarm. Tether texts the owner your `text` at the due time, even after a restart. Give exactly one of `inMinutes` (a number from now) or `at` (ISO 8601 with a UTC offset, for example 2026-10-24T09:00:00+05:30). Call time_now first when you need today's date.",
     parameters: Type.Object({
@@ -131,8 +133,9 @@ export function reminderTools(options: { task: ReminderTask; timeZone: string })
     },
   });
 
-  const list = defineTool({
+  const list = defineAskFirstTool({
     name: "reminder_list",
+    askFirst: false,
     description: "List the pending reminders and alarms with their ids and due times.",
     parameters: Type.Object({}),
     replay: "safe",
@@ -144,8 +147,9 @@ export function reminderTools(options: { task: ReminderTask; timeZone: string })
     },
   });
 
-  const cancel = defineTool({
+  const cancel = defineAskFirstTool({
     name: "reminder_cancel",
+    askFirst: false,
     description: "Cancel one pending reminder or alarm by its id, as shown by reminder_list.",
     parameters: Type.Object({ id: Type.String({ minLength: 1 }) }),
     replay: "safe",

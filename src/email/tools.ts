@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
-import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
+import { defineExtension, section, type Extension } from "@earendil-works/pi-durable";
+import { defineAskFirstTool } from "../approval.ts";
 import { failure, text } from "../tool.ts";
 import type { EmailBackend, EmailMessage, EmailSummary } from "./types.ts";
 
@@ -54,8 +55,9 @@ const messageLine = (label: string, value: string, limit: number) => `${label}: 
 export function createEmailExtension(options: EmailOptions): Extension {
   const { backend, timezone } = options;
 
-  const search = defineTool({
+  const search = defineAskFirstTool({
     name: "email_search",
+    askFirst: false,
     description: `Search the person's Gmail, newest first, with a Gmail search such as "from:asha@example.test" or "is:unread". Returns short summaries; read one with email_read.`,
     parameters: Type.Object({ query: Type.String({ minLength: 1, maxLength: 200 }) }),
     replay: "safe",
@@ -71,8 +73,9 @@ export function createEmailExtension(options: EmailOptions): Extension {
     },
   });
 
-  const read = defineTool({
+  const read = defineAskFirstTool({
     name: "email_read",
+    askFirst: false,
     description: "Read one email in full by its id from email_search.",
     parameters: Type.Object({ id: Type.String({ minLength: 1, maxLength: 200 }) }),
     replay: "safe",
@@ -89,8 +92,9 @@ export function createEmailExtension(options: EmailOptions): Extension {
     },
   });
 
-  const draft = defineTool({
+  const draft = defineAskFirstTool({
     name: "email_draft",
+    askFirst: false,
     description: "Save an email in the person's Gmail drafts without sending it. Nobody receives a draft.",
     parameters: Type.Object({
       to: Type.String({ minLength: 3, maxLength: 200, description: "Email address of the recipient" }),
@@ -110,32 +114,28 @@ export function createEmailExtension(options: EmailOptions): Extension {
     },
   });
 
-  const send = Object.assign(
-    defineTool({
-      name: "email_send",
-      description: "Send an email from the person's Gmail to someone else. This asks the person for approval first.",
-      parameters: Type.Object({
-        to: Type.String({ minLength: 3, maxLength: 200, description: "Email address of the recipient" }),
-        subject: Type.String({ minLength: 1, maxLength: SUBJECT_CHARS }),
-        body: Type.String({ minLength: 1, maxLength: BODY_CHARS }),
-      }),
-      replay: "unsafe",
-      execute: async (args) => {
-        const bad = check(args);
-        if (bad) return failure(bad);
-        try {
-          await backend.send(args);
-        } catch (error) {
-          return fail("The email was not sent", error);
-        }
-        return text(`Sent to ${oneLine(args.to, HEADER_CHARS)}: ${oneLine(args.subject, TITLE_CHARS)}`);
-      },
+  const send = defineAskFirstTool({
+    name: "email_send",
+    askFirst: (args) =>
+      `Send an email from your Gmail to ${oneLine(args.to, NAME_CHARS)} — ${oneLine(args.subject, TITLE_CHARS)}.`,
+    description: "Send an email from the person's Gmail to someone else. This asks the person for approval first.",
+    parameters: Type.Object({
+      to: Type.String({ minLength: 3, maxLength: 200, description: "Email address of the recipient" }),
+      subject: Type.String({ minLength: 1, maxLength: SUBJECT_CHARS }),
+      body: Type.String({ minLength: 1, maxLength: BODY_CHARS }),
     }),
-    {
-      askFirst: (args: { to: string; subject: string }) =>
-        `Send an email from your Gmail to ${oneLine(args.to, NAME_CHARS)} — ${oneLine(args.subject, TITLE_CHARS)}.`,
+    replay: "unsafe",
+    execute: async (args) => {
+      const bad = check(args);
+      if (bad) return failure(bad);
+      try {
+        await backend.send(args);
+      } catch (error) {
+        return fail("The email was not sent", error);
+      }
+      return text(`Sent to ${oneLine(args.to, HEADER_CHARS)}: ${oneLine(args.subject, TITLE_CHARS)}`);
     },
-  );
+  });
 
   return defineExtension({
     name: "tether-email",

@@ -1,10 +1,12 @@
 import { Type } from "@earendil-works/pi-ai";
-import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
+import { defineExtension, section, type Extension } from "@earendil-works/pi-durable";
+import { defineAskFirstTool } from "./approval.ts";
 import { MemoryDoc, NOTE_CHARS, NOTE_LIMIT } from "./docs.ts";
 import { failure, text } from "./tool.ts";
 
-const save = defineTool({
+const save = defineAskFirstTool({
   name: "memory_save",
+  askFirst: false,
   description: `Save one short note to your own long-term memory so you still know it in later conversations. At most ${NOTE_CHARS} characters.`,
   parameters: Type.Object({ note: Type.String({ minLength: 1, maxLength: NOTE_CHARS }) }),
   replay: "safe",
@@ -29,8 +31,9 @@ const save = defineTool({
   },
 });
 
-const forget = defineTool({
+const forget = defineAskFirstTool({
   name: "memory_forget",
+  askFirst: false,
   description: "Delete one saved note by its id, as shown in your memory.",
   parameters: Type.Object({ id: Type.String({ minLength: 1 }) }),
   replay: "safe",

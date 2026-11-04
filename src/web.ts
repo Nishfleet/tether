@@ -2,7 +2,6 @@ import { promises as dns, type LookupAddress } from "node:dns";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { Readability } from "@mozilla/readability";
 import { Type } from "@earendil-works/pi-ai";
-import { defineTool } from "@earendil-works/pi-durable";
 import { parseHTML } from "linkedom";
 import { Agent } from "undici";
 import type { Log } from "./log.ts";
@@ -235,8 +234,9 @@ export async function readPage(fetcher: Fetch, userAgent: string, url: URL): Pro
 export function webTools(options: { fetch: Fetch; userAgent: string; log: Log; links: Links; searchApiKey?: string }) {
   const { fetch: fetcher, userAgent, log, links, searchApiKey } = options;
 
-  const search = defineTool({
+  const search = defineAskFirstTool({
     name: "web_search",
+    askFirst: false,
     description: "Search the web. Returns the top results with a title, a link, the date and a short snippet. Read a result in full with web_read.",
     parameters: Type.Object({ query: Type.String({ minLength: 1, maxLength: 200 }) }),
     replay: "safe",

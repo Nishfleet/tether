@@ -1,6 +1,7 @@
 import type { Context } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
-import { defineDoc, defineTask, defineTool, type ConversationId, type Task, type TaskRuntime, type Tx } from "@earendil-works/pi-durable";
+import { defineDoc, defineTask, type ConversationId, type Task, type TaskRuntime, type Tx } from "@earendil-works/pi-durable";
+import { defineAskFirstTool } from "./approval.ts";
 import { type CalendarOptions, dedupe } from "./calendar/tools.ts";
 import { addDays, isoDay, parseWhen } from "./calendar/time.ts";
 import type { Locations } from "./channel.ts";
@@ -221,8 +222,9 @@ export async function startBrief(tx: Tx, task: BriefTask, conversationId: Conver
 export function briefTools(options: { task: BriefTask; timeZone: string }) {
   const { task, timeZone } = options;
 
-  const set = defineTool({
+  const set = defineAskFirstTool({
     name: "brief_set",
+    askFirst: false,
     description: `Change when Tether texts the daily morning brief (today's calendar, reminders and weather). It is on by default at ${DEFAULT_BRIEF_TIME}. Give the time as 24-hour HH:MM in the owner's time zone (${timeZone}).`,
     parameters: Type.Object({ time: Type.String({ pattern: TIME_PATTERN }) }),
     replay: "safe",
@@ -233,8 +235,9 @@ export function briefTools(options: { task: BriefTask; timeZone: string }) {
     },
   });
 
-  const off = defineTool({
+  const off = defineAskFirstTool({
     name: "brief_off",
+    askFirst: false,
     description: "Stop the daily morning brief. brief_set turns it on again.",
     parameters: Type.Object({}),
     replay: "safe",
