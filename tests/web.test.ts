@@ -227,8 +227,8 @@ describe("web tools", () => {
   it("offers two read-only tools, and only web_read can ask first", () => {
     const tools = webTools({ fetch: async () => new Response(""), userAgent: "tether-test", log: () => {}, links: new Links(), searchApiKey: "k" });
     assert.deepEqual(tools.map((tool) => tool.name), ["web_search", "web_read"]);
-    assert.equal("askFirst" in tools[0], false);
-    assert.equal("askFirst" in tools[1], true);
+    assert.equal(tools[0].askFirst, false);
+    assert.equal(typeof tools[1].askFirst, "function");
     for (const tool of tools) assert.equal(tool.replay, "safe");
   });
 

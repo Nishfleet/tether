@@ -78,7 +78,7 @@ describe("computer extension tools", () => {
   it("offers exactly three tools, none of which asks first, so a new tool forces a decision", () => {
     const { computer } = build(new FakeSpace());
     assert.deepEqual(computer.tools.map((tool) => tool.name).sort(), ["computer_read", "computer_run", "computer_write"]);
-    assert.deepEqual(computer.tools.filter((tool) => "askFirst" in tool).map((tool) => tool.name), []);
+    assert.deepEqual(computer.tools.filter((tool) => tool.askFirst !== false).map((tool) => tool.name), []);
   });
 
   it("replays only the pure read", () => {

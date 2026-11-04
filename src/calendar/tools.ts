@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
-import { defineExtension, defineTool, section, type Extension } from "@earendil-works/pi-durable";
+import { defineExtension, section, type Extension } from "@earendil-works/pi-durable";
+import { defineAskFirstTool } from "../approval.ts";
 import { addDays, describeWhen, isoDay, MAX_SPAN_DAYS, parseWhen, spanDays } from "./time.ts";
 import type { Backends, CalendarEvent, NewEvent, Person, SourceName } from "./types.ts";
 
@@ -15,7 +16,6 @@ const MAX_PEOPLE = 20;
 
 const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
 const failure = (value: string) => ({ ...text(value), isError: true });
-const askFirst = { askFirst: true } as const;
 
 const sourceChoice = Type.Optional(Type.Union([Type.Literal("google"), Type.Literal("icloud")], { description: "Which account to use. Leave out to use the first one connected." }));
 
@@ -64,8 +64,9 @@ export function createCalendarExtension(options: CalendarOptions): Extension {
     return { from: start.date, to: last };
   };
 
-  const listEvents = defineTool({
+  const listEvents = defineAskFirstTool({
     name: "calendar_list",
+    askFirst: false,
     description: `Read the person's calendar events between two times, merged from every connected account (${zones}). Times without an offset are in ${timezone}. A date such as 2026-10-24 as the end means the end of that day.`,
     parameters: Type.Object({
       from: Type.String({ minLength: 8, description: "Start, like 2026-10-24 or 2026-10-24T09:00" }),
@@ -125,29 +126,29 @@ export function createCalendarExtension(options: CalendarOptions): Extension {
     calendar: sourceChoice,
   };
 
-  const create = defineTool({
+  const create = defineAskFirstTool({
     name: "calendar_create",
+    askFirst: false,
     description: `Add an event to the person's own calendar with nobody else invited. Times without an offset are in ${timezone}. To invite other people use calendar_invite.`,
     parameters: Type.Object(eventFields),
     execute: async (args) => reportCreate(pick(backends.calendar, args.calendar), buildEvent(args, []), args.calendar ?? backends.calendar[0]?.source ?? "calendar"),
   });
 
-  const invite = Object.assign(
-    defineTool({
-      name: "calendar_invite",
-      description: `Add an event and send an invitation to other people by email. This asks the person for approval first. Times without an offset are in ${timezone}.`,
-      parameters: Type.Object({ ...eventFields, attendees: Type.Array(Type.String({ minLength: 3, maxLength: 200 }), { minItems: 1, maxItems: 20, description: "Email addresses of the guests" }) }),
-      execute: async (args) => {
-        const bad = args.attendees.find((email) => !EMAIL.test(email));
-        if (bad) return failure("Every guest must be a plain email address.");
-        return reportCreate(pick(backends.calendar, args.calendar), buildEvent(args, args.attendees), args.calendar ?? backends.calendar[0]?.source ?? "calendar");
-      },
-    }),
-    askFirst,
-  );
+  const invite = defineAskFirstTool({
+    name: "calendar_invite",
+    askFirst: true,
+    description: `Add an event and send an invitation to other people by email. This asks the person for approval first. Times without an offset are in ${timezone}.`,
+    parameters: Type.Object({ ...eventFields, attendees: Type.Array(Type.String({ minLength: 3, maxLength: 200 }), { minItems: 1, maxItems: 20, description: "Email addresses of the guests" }) }),
+    execute: async (args) => {
+      const bad = args.attendees.find((email) => !EMAIL.test(email));
+      if (bad) return failure("Every guest must be a plain email address.");
+      return reportCreate(pick(backends.calendar, args.calendar), buildEvent(args, args.attendees), args.calendar ?? backends.calendar[0]?.source ?? "calendar");
+    },
+  });
 
-  const find = defineTool({
+  const find = defineAskFirstTool({
     name: "contacts_find",
+    askFirst: false,
     description: `Look up people in the person's contacts (${backends.contacts.map((backend) => backend.source).join(" and ") || "none"}) by part of a name, phone number or email.`,
     parameters: Type.Object({ query: Type.String({ minLength: 2, maxLength: 100 }) }),
     replay: "safe",
@@ -176,8 +177,9 @@ export function createCalendarExtension(options: CalendarOptions): Extension {
     },
   });
 
-  const add = defineTool({
+  const add = defineAskFirstTool({
     name: "contacts_add",
+    askFirst: false,
     description: "Save a new contact with a name and a phone number or an email.",
     parameters: Type.Object({
       name: Type.String({ minLength: 1, maxLength: 100 }),

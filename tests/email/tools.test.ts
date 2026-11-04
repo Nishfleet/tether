@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
+import type { AnyGuardedTool } from "../../src/approval.ts";
 import { createEmailExtension } from "../../src/email/tools.ts";
 import type { EmailBackend, EmailMessage, EmailSummary, NewEmail } from "../../src/email/types.ts";
 
@@ -37,7 +38,7 @@ class FakeEmail implements EmailBackend {
 
 function setup(backend: FakeEmail) {
   const extension = createEmailExtension({ backend, timezone: "Asia/Kolkata" });
-  const tools = new Map((extension.tools ?? []).map((tool) => [tool.name, tool as ToolRegistration & { askFirst?: true | ((args: never) => string) }]));
+  const tools = new Map((extension.tools ?? []).map((tool) => [tool.name, tool as AnyGuardedTool]));
   const run = async (name: string, args: Record<string, unknown>) => {
     const result = await (tools.get(name) as ToolRegistration).execute(args as never, {} as never, {} as never);
     return { text: (result.output ?? []).map((part) => (part.type === "text" ? part.text : "")).join(""), isError: result.isError === true };
@@ -51,9 +52,9 @@ it("offers exactly four email tools and only email_send asks first", () => {
   assert.deepEqual(
     [...tools].map(([name, tool]) => [name, typeof tool.askFirst]),
     [
-      ["email_search", "undefined"],
-      ["email_read", "undefined"],
-      ["email_draft", "undefined"],
+      ["email_search", "boolean"],
+      ["email_read", "boolean"],
+      ["email_draft", "boolean"],
       ["email_send", "function"],
     ],
   );
