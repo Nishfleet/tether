@@ -45,13 +45,11 @@ function readmeRows(): Map<string, string> {
   return rows;
 }
 
-// oxlint-disable-next-line no-comments/disallowComments
-// A function rule can ask every time (email_send) or only sometimes (web_read), so its README cell is written here.
 const ruleCells: Record<string, string> = { email_send: "yes", web_read: "only for a link the owner did not send" };
 const asks = (tool: AnyGuardedTool) =>
   !tool.askFirst ? "no" : tool.askFirst === true ? "yes" : (ruleCells[tool.name] ?? `a README word for ${tool.name} in ruleCells`);
 
-it("the README tools table lists every tool once, with the ask-first rule the code has", () => {
+it("the README tools table lists every tool once, with the ask-first rule the code has; a function rule can ask every time (email_send) or only sometimes (web_read), so its README cell is written in ruleCells", () => {
   const rows = readmeRows();
   const tools = allTools();
   assert.deepEqual([...rows.keys()].sort(), tools.map((tool) => tool.name).sort());
