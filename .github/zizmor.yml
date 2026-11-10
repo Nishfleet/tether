@@ -1,0 +1,11 @@
+# zizmor policy, run by the `zizmor` job in .github/workflows/ci.yml.
+# The fleet stubs call fleet-ops reusable workflows at @main on purpose. The
+# runner group that serves agent jobs allows only these workflows at
+# refs/heads/main, so a SHA pin here drifts from agent.yml@main and strands every
+# dispatched job (0509#5231). Same exemption as .pinact.yaml at the repo root.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        Nishfleet/fleet-ops/*: ref-pin
+        "*": hash-pin

@@ -46,3 +46,37 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+
+  # actionlint fails the job on any workflow syntax, expression or shell error.
+  # rhysd/actionlint has no action.yml; its repo-root Dockerfile is the action, and
+  # actionlint with no args lints .github/workflows in the mounted workspace.
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: rhysd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
+
+  # zizmor fails the job on any workflow security finding (unpinned action, token
+  # persistence, dangerous trigger). Recipe: https://docs.zizmor.sh/integrations/
+  # Scoped to the workflows, as the other fleet repos do: the whole-repo collection
+  # also audits dependabot.yml, whose cooldown is the owner's call.
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+        with:
+          inputs: .github/workflows
+          version: 1.32.0
+          online-audits: false
+          advanced-security: false
