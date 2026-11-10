@@ -101,6 +101,22 @@ describe("Find My locations", () => {
     assert.equal(calls.closed, 1);
   });
 
+  it("makes the second refusal a failure instead of issuing a third token", async () => {
+    let gets = 0;
+    const { find, calls } = rig({
+      get: async () => {
+        gets += 1;
+        if (gets > 2) throw new Error("a third call must not happen");
+        throw new AuthenticationError("token expired", { code: "UNAUTHENTICATED", grpcCode: 16, retryable: false, context: {} } as never);
+      },
+    });
+    assert.equal(await find.current(), undefined);
+    assert.equal(gets, 2);
+    assert.deepEqual(calls.opened.map((entry) => entry.token), ["tok-1", "tok-2"]);
+    assert.equal(calls.issued, 2);
+    assert.equal(calls.closed, 1);
+  });
+
   it("keeps one client across calls and does not renew for other failures", async () => {
     const { find, calls } = rig({
       get: async () => {
@@ -113,13 +129,23 @@ describe("Find My locations", () => {
     assert.equal(calls.closed, 0);
   });
 
-  it("does not open a client when closed while a token is being issued", async () => {
+  it("does not wait for a token still being issued, and opens no client once closed", async () => {
     let finish!: () => void;
     const { find, calls } = rig({ issueGate: new Promise<void>((resolve) => (finish = resolve)) });
     const pending = find.current();
-    await find.close();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const closed = await Promise.race([
+      find.close().then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), 1000);
+      }),
+    ]);
+    clearTimeout(timer);
+    assert.equal(closed, true);
+    assert.equal(calls.issued, 0);
     finish();
     assert.equal(await pending, undefined);
+    assert.equal(calls.issued, 1);
     assert.deepEqual(calls.opened, []);
   });
 
