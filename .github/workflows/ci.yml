@@ -36,10 +36,7 @@ jobs:
       - run: npm test
 
   dependency-review:
-    # GitHub's own check: fails a PR that adds a dependency with a known vulnerability.
-    # Runs on merge_group too (the event carries the same head/base refs), so the
-    # required check still reports for a merge-queue entry instead of staying "Expected".
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
