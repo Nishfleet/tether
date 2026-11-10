@@ -16,4 +16,4 @@ Ask Tether to email someone. It texts "Allow this? Send an email from your Gmail
 End state: every test in the group `✔`. "asks before email_send and sends the email only after YES" proves the real email tool waits.
 
 ## Gotchas
-The rule is `askFirst` on each tool (`src/approval.ts`). A tool with no rule never reaches the hook's ask path.
+The rule is `askFirst` on each tool (`src/approval.ts`). Every tool must state it: the type requires the field and oxlint bans pi-durable's `defineTool`, which did not. The hook still treats a missing rule as ask-first, so a tool that slips through both cannot act without asking.
