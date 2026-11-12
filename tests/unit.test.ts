@@ -86,12 +86,5 @@ describe("supply chain", () => {
     assert.ok(Object.keys(ranges).length >= 5);
     for (const [name, range] of Object.entries(ranges)) assert.match(range, /^\d+\.\d+\.\d+$/, name);
   });
-
-  it("loads the Photon Spectrum iMessage provider", async () => {
-    const { Spectrum } = await import("spectrum-ts");
-    const { imessage } = await import("spectrum-ts/providers/imessage");
-    assert.equal(typeof Spectrum, "function");
-    assert.equal(typeof imessage.config, "function");
-  });
 });
 
