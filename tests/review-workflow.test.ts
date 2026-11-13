@@ -29,3 +29,11 @@ test("the answer stub waits for the CI workflow by its own name, so a rename the
   const waited = workflow("answer.yml").match(/^ {4}workflows: \[(.+)\]$/m)?.[1];
   assert.equal(waited, nameOf("ci.yml"));
 });
+
+test("the answer stub gates the red-run lane itself, so a green run or a non-agent branch never starts the called workflow", () => {
+  const file = workflow("answer.yml");
+  assert.match(file, /^ {4}if: >-$/m);
+  assert.match(file, /github\.event_name == 'pull_request_review' \|\|$/m);
+  assert.match(file, /github\.event\.workflow_run\.conclusion == 'failure' &&$/m);
+  assert.match(file, /startsWith\(github\.event\.workflow_run\.head_branch, 'agent\/issue-'\)\)$/m);
+});

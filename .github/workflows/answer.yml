@@ -6,10 +6,10 @@ name: answer
 on:
   pull_request_review:
     types: [submitted]
-  # A red CI run on an agent PR starts the lane too. The stub forwards every completed CI
-  # run, and the called workflow picks the red ones: its dispatch job runs for a
-  # pull_request CI run with conclusion 'failure' on an agent/issue-* branch of this repo,
-  # and it reads the PR number from
+  # A red CI run on an agent PR starts the lane too. The stub gates the run itself: the
+  # job's `if:` below fires only for a failed CI run of an agent/issue-* branch of this
+  # repo, so a green run, a main push or a dependabot branch never starts the called
+  # workflow. The called workflow reads the PR number itself, from
   # github.event.workflow_run.pull_requests[0].number. The name is the CI workflow's own
   # name (name: ci in .github/workflows/ci.yml), so a rename there would stop this trigger
   # silently.
@@ -20,10 +20,16 @@ on:
 permissions: {}
 jobs:
   answer:
-    # The lane's job dispatches agent.yml on main with the issue and the PR. A called
-    # workflow can only lower the caller's GITHUB_TOKEN permissions, never raise them.
+    # The reviewer's verdict rides the pull_request_review event untouched; the red-run
+    # path is held to a failed CI run of an agent/issue-* branch. A called workflow can
+    # only lower the caller's GITHUB_TOKEN permissions, never raise them.
+    if: >-
+      github.event_name == 'pull_request_review' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
+      startsWith(github.event.workflow_run.head_branch, 'agent/issue-'))
     permissions: {actions: write}
     # @main, not a SHA, the same as the agent stub.
     # The stub passes no input: the called workflow declares none, and an input it does not
-    # declare fails the run.
+    # declare fails the run. It takes the issue and the PR from the caller's event, at
+    # https://github.com/Nishfleet/fleet-ops/blob/main/.github/workflows/answer.yml
     uses: Nishfleet/fleet-ops/.github/workflows/answer.yml@main
