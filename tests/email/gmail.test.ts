@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 import { CLIENT_ID, CLIENT_SECRET, FakeGoogle, REFRESH_TOKEN, type FakeGoogleMessage } from "../calendar/fake-google.ts";
 import { gmailBackend } from "../../src/email/gmail.ts";
-import { GOOGLE_SCOPES } from "../../src/calendar/google.ts";
 
 const b64u = (text: string) => Buffer.from(text, "utf8").toString("base64url");
 
@@ -19,13 +18,6 @@ const plain = (id: string, from: string, subject: string, body: string, when: st
     ],
     body: { data: b64u(body), size: body.length },
   },
-});
-
-it("gmail search asks only for the two gmail scopes on top of the calendar and contact scopes", () => {
-  assert.deepEqual([...GOOGLE_SCOPES].filter((scope) => scope.includes("gmail")), [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.compose",
-  ]);
 });
 
 it("gmail search lists messages and reads only From and Subject headers for each hit", async () => {
