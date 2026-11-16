@@ -27,7 +27,8 @@
     "@types/node": "22.20.5",
     "eslint-plugin-no-comments": "1.2.1",
     "oxlint": "1.91.0",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "yaml": "2.9.1"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
