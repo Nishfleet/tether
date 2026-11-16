@@ -5,7 +5,7 @@ import { parse } from "yaml";
 
 type Workflow = {
   "run-name"?: string;
-  jobs?: Record<string, { uses?: string; secrets?: Record<string, string> }>;
+  jobs?: Record<string, { uses?: string; secrets?: Record<string, string> | "inherit" }>;
 };
 
 const workflow = (file: string): Workflow =>
@@ -19,7 +19,8 @@ const laneHandoff = (file: string, job: string, lane: string, secret: string) =>
     `${file}: the ${job} job must call the ${lane} lane`,
   );
   assert.ok(
-    called.secrets?.[secret] === `\${{ secrets.${secret} }}` || called.secrets?.[secret] === "inherit",
+    called.secrets === "inherit" ||
+      (typeof called.secrets === "object" && called.secrets[secret] === `\${{ secrets.${secret} }}`),
     `${file}: the ${job} job that calls the ${lane} lane must pass ${secret} by name`,
   );
 };
